@@ -176,6 +176,17 @@ svg.arrows path.dim{opacity:.12}
 .toast.err{background:#a61e4d}
 .loading{position:fixed;inset:52px 0 0 0;display:flex;align-items:center;justify-content:center;color:var(--ink2);z-index:10;background:rgba(245,246,248,.7)}
 .empty{padding:30px;text-align:center;color:var(--ink3)}
+.subtabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--line)}
+.subtabs button{border:0;background:none;padding:8px 14px;border-bottom:2px solid transparent;color:var(--ink2);font-weight:600}
+.subtabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+table.grid2 td{padding:4px 6px;vertical-align:middle}
+table.grid2 th{padding:6px;font-size:12px;color:var(--ink2);text-align:left;font-weight:600}
+table.grid2 .field{width:100%;min-height:30px;padding:4px 8px}
+tr.newrow td{background:#f8f9ff}
+.tplitem{padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px}
+.tplitem:hover{background:#f1f3f5}
+.tplitem.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+@media (max-width:720px){.tplgrid{grid-template-columns:1fr!important}}
 
 @media (max-width:720px){
   header{gap:8px;padding:0 10px} header h1{display:none}
@@ -195,7 +206,7 @@ svg.arrows path.dim{opacity:.12}
     <button data-v="gantt">甘特圖</button>
     <button data-v="people">人員排程</button>
     <button data-v="mine">我的工作</button>
-    <button data-v="admin" id="tabAdmin" class="hidden">管理</button>
+    <button data-v="admin" id="tabAdmin" class="hidden">設定</button>
   </nav>
   <div class="me"><span id="sync" class="sync hidden">同步中…</span><span class="nm" id="meName"></span><span class="role" id="meRole"></span><button class="iconbtn" id="reload" title="重新整理">↻</button><button class="iconbtn" id="logout" title="登出">登出</button></div>
 </header>
@@ -1037,44 +1048,247 @@ function openProject(p) {
 }
 
 /* ============== 管理（PM／管理員） ============== */
+var ADMIN_TABS = [
+  ['general', '一般設定', true], ['people', '人員', false], ['calendar', '行事曆', false], ['templates', '範本', false],
+  ['leaves', '休假', false], ['import', '匯入', true], ['log', '異動紀錄', false]
+];
+function isAdmin() { return S.data.me.role === '管理員'; }
+function adminRefresh() { S.data = API.refresh(S.data.history); index(); }
 function renderAdmin(m) {
-  var admin = S.data.me.role === '管理員';
-  var h = '<div class="toolbar"><b style="font-size:16px">管理</b><span class="grow"></span>' + (S.data.sheetUrl ? '<a class="btn" target="_blank" href="' + esc(S.data.sheetUrl) + '">開啟資料庫後台（Supabase）</a>' : '') + '</div>';
-  if (admin) {
-    h += '<div class="card" style="padding:14px 16px;margin-bottom:14px"><h3 style="margin:0 0 6px;font-size:15px">匯入資料</h3>';
-    h += '<div class="hint">選擇「美術專案管理DB.xlsx」，或從 Google 試算表「檔案 → 下載 → Microsoft Excel」下載的檔案。<b style="color:var(--danger)">匯入會清空並取代資料庫裡現有的全部工項、專案、人員、行事曆、休假和範本。</b></div>';
-    h += '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><input type="file" id="impFile" accept=".xlsx"><button class="btn primary" id="impGo" disabled>匯入</button></div><div id="impRes" style="margin-top:10px;font-size:13px"></div></div>';
-  }
-  h += '<div class="card" style="padding:14px 16px"><h3 style="margin:0 0 6px;font-size:15px">異動紀錄 <span class="faint" style="font-weight:400;font-size:12px">最近 300 筆</span></h3><div id="logBox" class="muted">載入中…</div></div>';
-  h += '<div class="hint" style="margin-top:10px">人員、Email、角色、行事曆、範本和設定，請在資料庫後台的 Table Editor 直接修改（像試算表一樣）。改完按右上角 ↻ 重新整理。</div>';
+  var tabs = ADMIN_TABS.filter(function (t) { return !t[2] || isAdmin(); });
+  if (!S.adminTab || !tabs.some(function (t) { return t[0] === S.adminTab; })) S.adminTab = tabs[0][0];
+  var h = '<div class="toolbar"><b style="font-size:16px">設定與管理</b><span class="grow"></span>' + (S.data.sheetUrl ? '<a class="btn" target="_blank" href="' + esc(S.data.sheetUrl) + '">資料庫後台（Supabase）</a>' : '') + '</div>';
+  h += '<div class="subtabs">' + tabs.map(function (t) { return '<button data-at="' + t[0] + '" class="' + (t[0] === S.adminTab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="adminBody"></div>';
   m.innerHTML = h;
+  $$('[data-at]', m).forEach(function (b) { b.addEventListener('click', function () { S.adminTab = b.dataset.at; renderAdmin(m); }); });
+  var body = $('#adminBody');
+  ({ general: adminGeneral, people: adminPeople, calendar: adminCalendar, templates: adminTemplates, leaves: adminLeaves, import: adminImport, log: adminLog })[S.adminTab](body);
+}
+function readonlyNote() { return isAdmin() ? '' : '<div class="hint" style="margin-bottom:10px">只有管理員能修改這裡的資料，你目前只能檢視。</div>'; }
+function doneMsg(msg) { toast(msg || '已儲存'); }
+
+/* ---- 一般設定 ---- */
+function adminGeneral(box) {
+  var d = API.adminData(), get = function (k) { var r = d.settings.filter(function (x) { return x.key === k; })[0]; return r ? r.value : ''; };
+  var known = { '管理員': 1, '美術可見範圍': 1 };
+  var h = '<div class="card" style="padding:16px 18px;margin-bottom:14px"><div class="form" style="grid-template-columns:1fr">';
+  h += '<label>管理員 Email<textarea class="field" id="sgAdmins" rows="3" placeholder="一行一個，或用逗號分隔">' + esc(get('管理員').split(/[\s,，;；]+/).filter(Boolean).join('\n')) + '</textarea><span class="hint">這些人擁有全部權限。也可以在「人員」把某人的角色設為「管理員」。</span></label>';
+  h += '<label>美術可以看到哪些工項<select class="field" id="sgScope" style="max-width:320px">' + [['全部', '全部專案（預設）'], ['參與的專案', '自己有工項的專案'], ['自己的工項', '只有自己的工項']].map(function (o) { return '<option value="' + o[0] + '"' + (get('美術可見範圍') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select><span class="hint">PM 和管理員一律看得到全部。</span></label>';
+  h += '</div><div style="margin-top:12px"><button class="btn primary" id="sgSave">儲存</button></div></div>';
+  var others = d.settings.filter(function (x) { return !known[x.key]; });
+  if (others.length) {
+    h += '<div class="card" style="padding:16px 18px"><h3 style="margin:0 0 8px;font-size:14px">其他設定</h3><table class="grid2"><thead><tr><th>項目</th><th>值</th><th>說明</th><th></th></tr></thead><tbody>' +
+      others.map(function (r, i) { return '<tr><td>' + esc(r.key) + '</td><td><input class="field" data-ok="' + i + '" value="' + esc(r.value) + '"></td><td class="faint">' + esc(r.note) + '</td><td><button class="btn small" data-osave="' + i + '">儲存</button></td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+  box.innerHTML = h;
+  $('#sgSave').addEventListener('click', function () {
+    var list = $('#sgAdmins').value.split(/[\s,，;；]+/).map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+    var bad = list.filter(function (x) { return !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x); });
+    if (bad.length) { toast('Email 格式不正確：' + bad.join('、'), true); return; }
+    var mePerson = d.people.filter(function (p) { return p.email === S.data.me.email; })[0];
+    if (list.indexOf(S.data.me.email) < 0 && !(mePerson && mePerson.role === '管理員') && !confirm('名單裡沒有你自己（' + S.data.me.email + '），儲存後你會失去管理員權限。確定嗎？')) return;
+    busy(true);
+    call('saveSetting', '管理員', list.join(', ')).then(function () { return call('saveSetting', '美術可見範圍', $('#sgScope').value); })
+      .then(function () { busy(false); adminRefresh(); doneMsg('已儲存設定'); }).catch(fail);
+  });
+  $$('[data-osave]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var r = others[+b.dataset.osave]; busy(true);
+      call('saveSetting', r.key, $('[data-ok="' + b.dataset.osave + '"]', box).value).then(function () { busy(false); adminRefresh(); doneMsg(); }).catch(fail);
+    });
+  });
+}
+
+/* ---- 人員 ---- */
+function adminPeople(box) {
+  var d = API.adminData(), admin = isAdmin();
+  var q = (S.peopleQ || '').toLowerCase(), showOff = !!S.peopleOff;
+  var list = d.people.filter(function (p) { return (showOff || p.active) && (!q || (p.name + ' ' + p.email + ' ' + p.alias).toLowerCase().indexOf(q) >= 0); });
+  var noEmail = d.people.filter(function (p) { return p.active && !p.email; }).length;
+  var h = readonlyNote() + '<div class="toolbar"><input type="search" class="field" id="ppQ" placeholder="搜尋姓名、Email" value="' + esc(S.peopleQ || '') + '"><label class="chk"><input type="checkbox" id="ppOff"' + (showOff ? ' checked' : '') + '>顯示已離職</label><span class="grow"></span>' +
+    (noEmail ? '<span class="warnmark w">' + noEmail + ' 位在職人員還沒填 Email，無法登入</span>' : '') + '</div>';
+  h += '<div class="tablewrap" style="max-height:calc(100vh - 260px)"><table class="tasks grid2" style="min-width:900px"><thead><tr><th>姓名</th><th>Email（登入用的公司帳號）</th><th>角色</th><th>別名</th><th>在職</th><th>備註</th><th class="num">工項</th><th></th></tr></thead><tbody>';
+  if (admin) h += '<tr class="newrow"><td><input class="field" id="npName" placeholder="新人員姓名"></td><td><input class="field" id="npEmail" placeholder="name@auer.com.tw"></td><td>' + roleSel('npRole', '美術') + '</td><td><input class="field" id="npAlias"></td><td></td><td><input class="field" id="npNote"></td><td></td><td><button class="btn small primary" id="npAdd">新增</button></td></tr>';
+  list.forEach(function (p, i) {
+    var dis = admin ? '' : ' disabled';
+    h += '<tr data-pi="' + i + '"><td><b>' + esc(p.name) + '</b></td><td><input class="field" data-f="email" value="' + esc(p.email) + '"' + dis + '></td><td>' + roleSel('', p.role, dis) + '</td>' +
+      '<td><input class="field" data-f="alias" value="' + esc(p.alias) + '"' + dis + '></td><td style="text-align:center"><input type="checkbox" data-f="active"' + (p.active ? ' checked' : '') + dis + '></td>' +
+      '<td><input class="field" data-f="note" value="' + esc(p.note) + '"' + dis + '></td><td class="num">' + (d.usage[p.name] || 0) + '</td>' +
+      '<td style="white-space:nowrap">' + (admin ? '<button class="btn small" data-psave="' + i + '" disabled>儲存</button> ' + (d.usage[p.name] ? '' : '<button class="btn small danger" data-pdel="' + i + '">刪除</button>') : '') + '</td></tr>';
+  });
+  h += '</tbody></table></div><div class="hint" style="margin-top:8px">姓名建立後不能修改（工項用姓名對應負責人）。離職請取消勾選「在職」，歷史工項會保留。</div>';
+  box.innerHTML = h;
+  $('#ppQ').addEventListener('input', debounce(function (e) { S.peopleQ = e.target.value; adminPeople(box); var n = $('#ppQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250));
+  $('#ppOff').addEventListener('change', function (e) { S.peopleOff = e.target.checked; adminPeople(box); });
+  if (!admin) return;
+  $$('tr[data-pi]', box).forEach(function (tr) {
+    var btn = $('[data-psave]', tr);
+    $$('input,select', tr).forEach(function (el) { el.addEventListener('input', function () { btn.disabled = false; }); el.addEventListener('change', function () { btn.disabled = false; }); });
+  });
+  $$('[data-psave]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var p = list[+b.dataset.psave], tr = b.closest('tr');
+      var o = { email: $('[data-f=email]', tr).value, role: $('select', tr).value, alias: $('[data-f=alias]', tr).value, active: $('[data-f=active]', tr).checked, note: $('[data-f=note]', tr).value };
+      busy(true);
+      call('savePerson', p.name, o).then(function () { busy(false); adminRefresh(); doneMsg('已儲存：' + p.name); adminPeople(box); }).catch(fail);
+    });
+  });
+  $$('[data-pdel]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var p = list[+b.dataset.pdel];
+      if (!confirm('刪除人員「' + p.name + '」？')) return;
+      busy(true);
+      call('deletePerson', p.name).then(function () { busy(false); adminRefresh(); doneMsg('已刪除'); adminPeople(box); }).catch(fail);
+    });
+  });
+  $('#npAdd').addEventListener('click', function () {
+    var o = { name: $('#npName').value, email: $('#npEmail').value, role: $('#npRole').value, alias: $('#npAlias').value, note: $('#npNote').value, active: true };
+    busy(true);
+    call('savePerson', null, o).then(function () { busy(false); adminRefresh(); doneMsg('已新增：' + o.name); adminPeople(box); }).catch(fail);
+  });
+}
+function roleSel(id, v, dis) { return '<select class="field"' + (id ? ' id="' + id + '"' : '') + (dis || '') + '>' + ['美術', 'PM', '管理員'].map(function (r) { return '<option' + (r === v ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select>'; }
+
+/* ---- 行事曆 ---- */
+function adminCalendar(box) {
+  var d = API.adminData(), admin = isAdmin();
+  var years = {}; d.calendar.forEach(function (c) { years[c.day.slice(0, 4)] = 1; });
+  var yNow = S.data.today.slice(0, 4); years[yNow] = 1;
+  var y = S.calYear || yNow;
+  var list = d.calendar.filter(function (c) { return c.day.slice(0, 4) === y; });
+  var WD = '日一二三四五六';
+  var h = readonlyNote() + '<div class="toolbar"><select class="field" id="cYear">' + Object.keys(years).sort().map(function (k) { return '<option' + (k === y ? ' selected' : '') + '>' + k + '</option>'; }).join('') + '</select><span class="muted">' + list.filter(function (c) { return c.type === '假日'; }).length + ' 天假日、' + list.filter(function (c) { return c.type === '補班'; }).length + ' 天補班</span></div>';
+  if (admin) h += '<div class="card" style="padding:12px 14px;margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b style="font-size:13px">新增</b><input class="field" type="date" id="cDay"><input class="field" type="date" id="cDay2" title="結束日（選填，連續多天）"><select class="field" id="cType"><option>假日</option><option>補班</option></select><input class="field" id="cName" placeholder="名稱，例如 中秋節" style="flex:1;min-width:160px"><button class="btn primary" id="cAdd">新增</button><span class="hint" style="width:100%">週六、週日本來就不排工作，不用加。連續放假可以填結束日，會自動跳過週末。補班日請選「補班」。</span></div>';
+  h += '<div class="tablewrap" style="max-height:calc(100vh - 330px)"><table class="tasks grid2" style="min-width:520px"><thead><tr><th>日期</th><th>星期</th><th>類型</th><th>名稱</th><th></th></tr></thead><tbody>' +
+    (list.length ? list.map(function (c, i) { return '<tr><td class="date">' + c.day + '</td><td>' + WD[new Date(c.day + 'T00:00:00Z').getUTCDay()] + '</td><td>' + (c.type === '補班' ? '<span class="warnmark w">補班</span>' : '假日') + '</td><td>' + esc(c.name) + '</td><td>' + (admin ? '<button class="btn small danger" data-cdel="' + i + '">刪除</button>' : '') + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">這一年還沒有設定假日。</td></tr>') + '</tbody></table></div>';
+  box.innerHTML = h;
+  $('#cYear').addEventListener('change', function (e) { S.calYear = e.target.value; adminCalendar(box); });
+  if (!admin) return;
+  $('#cAdd').addEventListener('click', function () {
+    var a = $('#cDay').value, b = $('#cDay2').value || a, type = $('#cType').value, name = $('#cName').value.trim();
+    if (!a) { toast('請選日期', true); return; }
+    var days = [];
+    for (var n = dn(a); n <= dn(b) && days.length < 60; n++) { var w = wk(n); if (type === '補班' || (w !== 0 && w !== 6)) days.push(ds(n)); }
+    if (!days.length) { toast('選的日期都是週末，不用加。', true); return; }
+    busy(true);
+    days.reduce(function (p, day) { return p.then(function () { return call('saveDay', { day: day, type: type, name: name }); }); }, Promise.resolve())
+      .then(function () { busy(false); S.calYear = a.slice(0, 4); adminRefresh(); doneMsg('已新增 ' + days.length + ' 天，排程已重算'); adminCalendar(box); }).catch(fail);
+  });
+  $$('[data-cdel]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var c = list[+b.dataset.cdel]; busy(true);
+      call('deleteDay', c.day).then(function () { busy(false); adminRefresh(); doneMsg('已刪除 ' + c.day); adminCalendar(box); }).catch(fail);
+    });
+  });
+}
+
+/* ---- 範本 ---- */
+function adminTemplates(box) {
+  var d = API.adminData();
+  var names = []; d.templates.forEach(function (t) { if (names.indexOf(t.tpl) < 0) names.push(t.tpl); });
+  if (S.tplSel === undefined || (S.tplSel !== '' && names.indexOf(S.tplSel) < 0)) S.tplSel = names[0] || '';
+  var editing = S.tplSel;
+  var steps = S.tplDraft && S.tplDraft.name === editing ? S.tplDraft.steps : d.templates.filter(function (t) { return t.tpl === editing; }).map(function (t) { return { title: t.title, grp: t.grp, days: t.days, preds: t.preds, mode: t.mode }; });
+  if (!editing && !steps.length) steps = [{ title: '', grp: '', days: 1, preds: '', mode: '排隊' }];
+  var shownName = S.tplDraft && S.tplDraft.name === editing && S.tplDraft.title !== undefined ? S.tplDraft.title : editing;
+  S.tplDraft = { name: editing, steps: steps, title: shownName };
+  var h = '<div style="display:grid;grid-template-columns:minmax(160px,220px) 1fr;gap:14px;align-items:start" class="tplgrid">';
+  h += '<div class="card" style="padding:8px">' + names.map(function (n) { return '<div class="tplitem' + (n === editing ? ' on' : '') + '" data-tn="' + esc(n) + '">' + esc(n) + ' <span class="faint">' + d.templates.filter(function (t) { return t.tpl === n; }).length + ' 步</span></div>'; }).join('') +
+    '<div class="tplitem' + (editing === '' ? ' on' : '') + '" data-tn="">＋ 新範本</div></div>';
+  h += '<div class="card" style="padding:14px 16px"><div class="toolbar"><label style="font-size:12px;color:var(--ink2)">範本名稱 <input class="field" id="tnName" value="' + esc(shownName) + '" placeholder="例如 角色標準流程"></label><span class="grow"></span>' + (editing ? '<button class="btn danger" id="tnDel">刪除範本</button>' : '') + '</div>';
+  h += '<table class="grid2" style="width:100%"><thead><tr><th style="width:36px">步驟</th><th>工項名稱</th><th>群組</th><th style="width:80px">天數</th><th style="width:110px">前置步驟</th><th style="width:120px">方式</th><th style="width:120px"></th></tr></thead><tbody>' +
+    steps.map(function (s, i) {
+      return '<tr data-si="' + i + '"><td class="num">' + (i + 1) + '</td><td><input class="field" data-k="title" value="' + esc(s.title) + '"></td><td><input class="field" data-k="grp" value="' + esc(s.grp) + '"></td>' +
+        '<td><input class="field" type="number" step="0.5" min="0" data-k="days" value="' + esc(s.days) + '"></td><td><input class="field" data-k="preds" value="' + esc(s.preds) + '" placeholder="' + (i ? i : '') + '"></td>' +
+        '<td><select class="field" data-k="mode"><option' + (s.mode !== '平行' ? ' selected' : '') + '>排隊</option><option' + (s.mode === '平行' ? ' selected' : '') + '>平行</option></select></td>' +
+        '<td style="white-space:nowrap"><button class="btn small" data-mv="-1">↑</button> <button class="btn small" data-mv="1">↓</button> <button class="btn small danger" data-rm="1">×</button></td></tr>';
+    }).join('') + '</tbody></table>';
+  h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="tnAdd">＋ 加一步</button><span class="grow" style="flex:1"></span><button class="btn primary" id="tnSave">儲存範本</button></div>';
+  h += '<div class="hint" style="margin-top:8px">「前置步驟」填前面步驟的編號，多個用逗號，例如「1」或「2,3」。套用範本時會自動串成相依。「平行」表示不佔用負責人的時間（例如監修外包）。</div></div></div>';
+  box.innerHTML = h;
+  var sync = function () {
+    S.tplDraft.title = $('#tnName').value;
+    $$('tr[data-si]', box).forEach(function (tr) { var s = steps[+tr.dataset.si]; $$('[data-k]', tr).forEach(function (el) { s[el.dataset.k] = el.value; }); });
+  };
+  $$('[data-tn]', box).forEach(function (el) { el.addEventListener('click', function () { S.tplSel = el.dataset.tn; S.tplDraft = null; adminTemplates(box); }); });
+  $$('tr[data-si] button', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      sync(); var i = +b.closest('tr').dataset.si;
+      if (b.dataset.rm) steps.splice(i, 1);
+      else { var j = i + Number(b.dataset.mv); if (j < 0 || j >= steps.length) return; var t = steps[i]; steps[i] = steps[j]; steps[j] = t; }
+      adminTemplates(box);
+    });
+  });
+  $('#tnAdd').addEventListener('click', function () { sync(); steps.push({ title: '', grp: steps.length ? steps[steps.length - 1].grp : '', days: 1, preds: String(steps.length || ''), mode: '排隊' }); adminTemplates(box); });
+  $('#tnSave').addEventListener('click', function () {
+    sync(); var name = $('#tnName').value.trim(); busy(true);
+    call('saveTemplate', editing || null, name, steps).then(function () { busy(false); S.tplSel = name; S.tplDraft = null; adminRefresh(); doneMsg('已儲存範本「' + name + '」'); adminTemplates(box); }).catch(fail);
+  });
+  var del = $('#tnDel');
+  if (del) del.addEventListener('click', function () {
+    if (!confirm('刪除範本「' + editing + '」？已經用這個範本建立的工項不受影響。')) return;
+    busy(true);
+    call('deleteTemplate', editing).then(function () { busy(false); S.tplSel = undefined; S.tplDraft = null; adminRefresh(); doneMsg('已刪除範本'); adminTemplates(box); }).catch(fail);
+  });
+}
+
+/* ---- 休假 ---- */
+function adminLeaves(box) {
+  var d = API.adminData();
+  var who = S.leaveWho || '', past = !!S.leavePast, today = S.data.today;
+  var list = d.leaves.filter(function (l) { return (!who || l.person === who) && (past || l.end_date >= today); });
+  var names = {}; d.leaves.forEach(function (l) { names[l.person] = 1; });
+  var h = '<div class="toolbar"><select class="field" id="lvWho"><option value="">全部人員</option>' + Object.keys(names).sort().map(function (n) { return '<option' + (n === who ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select><label class="chk"><input type="checkbox" id="lvPast"' + (past ? ' checked' : '') + '>包含已結束的</label><span class="grow"></span><button class="btn primary" id="lvAdd">＋ 登記休假</button></div>';
+  h += '<div class="tablewrap" style="max-height:calc(100vh - 260px)"><table class="tasks grid2" style="min-width:640px"><thead><tr><th>人員</th><th>開始</th><th>結束</th><th class="num">天數</th><th>類型</th><th>說明</th><th></th></tr></thead><tbody>' +
+    (list.length ? list.map(function (l, i) { return '<tr><td>' + esc(l.person) + '</td><td class="date">' + l.start_date + '</td><td class="date">' + l.end_date + '</td><td class="num">' + esc(l.days === null ? '' : l.days) + '</td><td>' + esc(l.type) + '</td><td>' + esc(l.note) + '</td><td><button class="btn small danger" data-ldel="' + i + '">刪除</button></td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">沒有休假紀錄。</td></tr>') + '</tbody></table></div>';
+  box.innerHTML = h;
+  $('#lvWho').addEventListener('change', function (e) { S.leaveWho = e.target.value; adminLeaves(box); });
+  $('#lvPast').addEventListener('change', function (e) { S.leavePast = e.target.checked; adminLeaves(box); });
+  $('#lvAdd').addEventListener('click', function () { openLeave(who); });
+  $$('[data-ldel]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var l = list[+b.dataset.ldel];
+      if (!confirm('刪除 ' + l.person + ' ' + l.start_date + '~' + l.end_date + ' 的休假？')) return;
+      busy(true);
+      call('deleteLeave', l.id).then(function () { busy(false); adminRefresh(); doneMsg('已刪除，排程已重算'); adminLeaves(box); }).catch(fail);
+    });
+  });
+}
+
+/* ---- 匯入 ---- */
+function adminImport(box) {
+  box.innerHTML = '<div class="card" style="padding:14px 16px"><h3 style="margin:0 0 6px;font-size:15px">匯入資料</h3>' +
+    '<div class="hint">選擇「美術專案管理DB.xlsx」、每日備份的 xlsx，或從 Google 試算表「檔案 → 下載 → Microsoft Excel」下載的檔案。<b style="color:var(--danger)">匯入會清空並取代資料庫裡現有的全部工項、專案、人員、行事曆、休假和範本。</b></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><input type="file" id="impFile" accept=".xlsx"><button class="btn primary" id="impGo" disabled>匯入</button></div><div id="impRes" style="margin-top:10px;font-size:13px"></div></div>';
+  var f = $('#impFile'), parsed = null;
+  f.addEventListener('change', function () {
+    parsed = null; $('#impGo').disabled = true; $('#impRes').textContent = '讀取中…';
+    var file = f.files[0]; if (!file) return;
+    need('XLSX').then(function () { return file.arrayBuffer(); }).then(function (buf) {
+      parsed = API.parseWorkbook(buf);
+      var c = parsed.counts;
+      $('#impRes').innerHTML = '讀到：工項 <b>' + c.tasks + '</b>、專案 ' + c.projects + '、人員 ' + c.people + '、行事曆 ' + c.calendar + '、休假 ' + c.leaves + '、範本步驟 ' + c.templates +
+        (parsed.warn.length ? '<div class="warnbox" style="margin-top:8px">' + parsed.warn.map(esc).join('<br>') + '</div>' : '');
+      $('#impGo').disabled = false;
+    }).catch(function (e) { $('#impRes').innerHTML = '<span class="late">' + esc(e.message) + '</span>'; });
+  });
+  $('#impGo').addEventListener('click', function () {
+    if (!parsed || !confirm('確定要清空資料庫並匯入這個檔案？')) return;
+    busy(true);
+    call('importPayload', parsed.payload).then(function (r) { busy(false); toast('已匯入 ' + r.tasks + ' 個工項'); load(false); }).catch(fail);
+  });
+}
+
+/* ---- 異動紀錄 ---- */
+function adminLog(box) {
+  box.innerHTML = '<div class="card" style="padding:14px 16px"><h3 style="margin:0 0 6px;font-size:15px">異動紀錄 <span class="faint" style="font-weight:400;font-size:12px">最近 300 筆</span></h3><div id="logBox" class="muted">載入中…</div></div>';
   call('getLog', 300).then(function (rows) {
-    var box = $('#logBox'); if (!box) return;
-    box.innerHTML = rows.length ? '<div class="tablewrap" style="max-height:60vh"><table class="tasks" style="min-width:760px"><thead><tr><th>時間</th><th>使用者</th><th>動作</th><th>對象</th><th>ID</th><th>內容</th></tr></thead><tbody>' + rows.map(function (r) {
+    var lb = $('#logBox'); if (!lb) return;
+    lb.innerHTML = rows.length ? '<div class="tablewrap" style="max-height:65vh"><table class="tasks" style="min-width:760px"><thead><tr><th>時間</th><th>使用者</th><th>動作</th><th>對象</th><th>ID</th><th>內容</th></tr></thead><tbody>' + rows.map(function (r) {
       var t = new Date(new Date(r.at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
       return '<tr><td class="date">' + t + '</td><td>' + esc(r.email) + '</td><td>' + esc(r.action) + '</td><td>' + esc(r.kind) + '</td><td>' + esc(r.ref) + '</td><td style="white-space:pre-wrap">' + esc(r.content) + '</td></tr>';
     }).join('') + '</tbody></table></div>' : '還沒有紀錄。';
-  }).catch(function (e) { var box = $('#logBox'); if (box) box.textContent = e.message; });
-  var f = $('#impFile');
-  if (f) {
-    var parsed = null;
-    f.addEventListener('change', function () {
-      parsed = null; $('#impGo').disabled = true; $('#impRes').textContent = '讀取中…';
-      var file = f.files[0]; if (!file) return;
-      need('XLSX').then(function () { return file.arrayBuffer(); }).then(function (buf) {
-        parsed = API.parseWorkbook(buf);
-        var c = parsed.counts;
-        $('#impRes').innerHTML = '讀到：工項 <b>' + c.tasks + '</b>、專案 ' + c.projects + '、人員 ' + c.people + '、行事曆 ' + c.calendar + '、休假 ' + c.leaves + '、範本步驟 ' + c.templates +
-          (parsed.warn.length ? '<div class="warnbox" style="margin-top:8px">' + parsed.warn.map(esc).join('<br>') + '</div>' : '');
-        $('#impGo').disabled = false;
-      }).catch(function (e) { $('#impRes').innerHTML = '<span class="late">' + esc(e.message) + '</span>'; });
-    });
-    $('#impGo').addEventListener('click', function () {
-      if (!parsed || !confirm('確定要清空資料庫並匯入這個檔案？')) return;
-      busy(true);
-      call('importPayload', parsed.payload).then(function (r) { busy(false); toast('已匯入 ' + r.tasks + ' 個工項'); load(false); }).catch(fail);
-    });
-  }
+  }).catch(function (e) { var lb = $('#logBox'); if (lb) lb.textContent = e.message; });
 }
 
 /* ============== 其他人修改時自動更新 ============== */

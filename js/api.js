@@ -20,6 +20,9 @@ var API = (function () {
     if (/row-level security|permission denied/i.test(m)) m = '你沒有這個操作的權限。';
     if (/JWT expired|invalid JWT/i.test(m)) m = '登入已過期，請重新整理頁面再登入一次。';
     if (/Failed to fetch|NetworkError/i.test(m)) m = '連不到資料庫，請檢查網路後再試一次。';
+    if (/people_email_key/.test(m)) m = '這個 Email 已經有人使用。';
+    if (/people_pkey/.test(m)) m = '已經有同名的人員。';
+    if (/calendar_pkey/.test(m)) m = '這一天已經在行事曆裡。';
     return new Error(m);
   }
   function chk(res) { if (res.error) throw err(res.error); return res.data; }
@@ -115,7 +118,7 @@ var API = (function () {
       cache.tasks = r[0].map(fromDb); cache.byId = {};
       cache.tasks.forEach(function (t) { cache.byId[t.id] = t; });
       cache.projects = r[1]; cache.people = r[2]; cache.calendar = r[3]; cache.leaves = r[4]; cache.templates = r[5];
-      cache.settings = {}; r[6].forEach(function (s) { cache.settings[s.key] = s.value; });
+      cache.settings = {}; cache.settingsRows = r[6]; r[6].forEach(function (s) { cache.settings[s.key] = s.value; });
       lastSync = r[0].reduce(function (a, x) { return x.updated_at > a ? x.updated_at : a; }, '1970-01-01');
       compute();
     });
@@ -446,6 +449,119 @@ var API = (function () {
     }).catch(function (e) { throw err(e); });
   }
 
+
+  /* ---------------- 設定後台（管理員／PM） ---------------- */
+  function adminData() {
+    return {
+      settings: (cache.settingsRows || []).map(function (r) { return { key: r.key, value: r.value, note: r.note }; }),
+      people: cache.people.map(function (p) { return { name: p.name, email: p.email || '', role: p.role, alias: p.alias, active: p.active, note: p.note }; })
+        .sort(function (a, b) { return (b.active - a.active) || a.name.localeCompare(b.name, 'zh-Hant'); }),
+      calendar: cache.calendar.slice().sort(function (a, b) { return a.day < b.day ? -1 : 1; }),
+      templates: cache.templates.slice().sort(function (a, b) { return a.tpl === b.tpl ? a.step - b.step : (a.tpl < b.tpl ? -1 : 1); }),
+      leaves: cache.leaves.slice().sort(function (a, b) { return a.start_date < b.start_date ? 1 : -1; }),
+      usage: (function () { var u = {}; cache.tasks.forEach(function (t) { if (t.owner) u[t.owner] = (u[t.owner] || 0) + 1; }); return u; })()
+    };
+  }
+  function refresh(history) { compute(); return snapshot(history); }
+
+  function saveSetting(key, value) {
+    key = String(key || '').trim();
+    if (!key) return Promise.reject(new Error('請填項目名稱。'));
+    return sb.from('settings').upsert({ key: key, value: value || '' }, { onConflict: 'key' }).select().then(function (res) {
+      var row = chk(res)[0];
+      if (!row) throw new Error('你沒有修改設定的權限。');
+      var i = (cache.settingsRows || []).findIndex(function (x) { return x.key === key; });
+      if (i >= 0) cache.settingsRows[i] = row; else cache.settingsRows.push(row);
+      cache.settings[key] = row.value;
+      return row;
+    }).catch(function (e) { throw err(e); });
+  }
+
+  function savePerson(origName, o) {
+    var row = { email: o.email ? String(o.email).trim().toLowerCase() : null, role: o.role || '美術', alias: o.alias || '', active: o.active !== false, note: o.note || '' };
+    if (row.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(row.email)) return Promise.reject(new Error('Email 格式不正確。'));
+    var q;
+    if (origName) q = sb.from('people').update(row).eq('name', origName).select();
+    else {
+      var name = String(o.name || '').trim();
+      if (!name) return Promise.reject(new Error('請填姓名。'));
+      row.name = name;
+      q = sb.from('people').insert(row).select();
+    }
+    return q.then(function (res) {
+      var p = chk(res)[0];
+      if (!p) throw new Error('你沒有修改人員的權限。');
+      var i = cache.people.findIndex(function (x) { return x.name === p.name; });
+      if (i >= 0) cache.people[i] = p; else cache.people.push(p);
+      return p;
+    }).catch(function (e) { throw err(e); });
+  }
+  function deletePerson(name) {
+    var n = cache.tasks.filter(function (t) { return t.owner === name; }).length;
+    if (n) return Promise.reject(new Error('「' + name + '」還有 ' + n + ' 個工項，不能刪除。離職的話請取消勾選「在職」。'));
+    return sb.from('people').delete().eq('name', name).select('name').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除人員的權限。');
+      cache.people = cache.people.filter(function (p) { return p.name !== name; });
+    }).catch(function (e) { throw err(e); });
+  }
+
+  function saveDay(o) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.day || '')) return Promise.reject(new Error('請選日期。'));
+    var row = { day: o.day, type: o.type === '補班' ? '補班' : '假日', name: o.name || '' };
+    return sb.from('calendar').upsert(row, { onConflict: 'day' }).select().then(function (res) {
+      var c = chk(res)[0];
+      if (!c) throw new Error('你沒有修改行事曆的權限。');
+      cache.calendar = cache.calendar.filter(function (x) { return x.day !== c.day; }).concat([c]);
+      return c;
+    }).catch(function (e) { throw err(e); });
+  }
+  function deleteDay(day) {
+    return sb.from('calendar').delete().eq('day', day).select('day').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有修改行事曆的權限。');
+      cache.calendar = cache.calendar.filter(function (x) { return x.day !== day; });
+    }).catch(function (e) { throw err(e); });
+  }
+
+  /** 整個範本一次存：先刪掉舊的步驟再寫入。oldName 用於改名 */
+  function saveTemplate(oldName, name, steps) {
+    name = String(name || '').trim();
+    if (!name) return Promise.reject(new Error('請填範本名稱。'));
+    if (!steps.length) return Promise.reject(new Error('範本至少要有一個步驟。'));
+    var nums = {};
+    try {
+      steps.forEach(function (s, i) {
+        if (!String(s.title || '').trim()) throw new Error('第 ' + (i + 1) + ' 步缺工項名稱。');
+        nums[i + 1] = 1;
+      });
+      steps.forEach(function (s, i) {
+        split(s.preds).forEach(function (p) { if (!nums[p] || Number(p) >= i + 1) throw new Error('第 ' + (i + 1) + ' 步的前置步驟「' + p + '」必須是前面的步驟編號。'); });
+      });
+    } catch (e) { return Promise.reject(e); }
+    if (name !== oldName && cache.templates.some(function (t) { return t.tpl === name; })) return Promise.reject(new Error('已經有叫「' + name + '」的範本。'));
+    var rows = steps.map(function (s, i) {
+      return { tpl: name, step: i + 1, title: String(s.title).trim(), grp: s.grp || '', days: num(s.days, 1), preds: split(s.preds).join(','), mode: s.mode === '平行' ? '平行' : '排隊' };
+    });
+    var del = oldName ? sb.from('templates').delete().eq('tpl', oldName).then(chk) : Promise.resolve();
+    return del.then(function () { return sb.from('templates').insert(rows).select(); }).then(function (res) {
+      var saved = chk(res);
+      cache.templates = cache.templates.filter(function (t) { return t.tpl !== oldName && t.tpl !== name; }).concat(saved);
+      return saved;
+    }).catch(function (e) { throw err(e); });
+  }
+  function deleteTemplate(name) {
+    return sb.from('templates').delete().eq('tpl', name).select('id').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除範本的權限。');
+      cache.templates = cache.templates.filter(function (t) { return t.tpl !== name; });
+    }).catch(function (e) { throw err(e); });
+  }
+
+  function deleteLeave(id) {
+    return sb.from('leaves').delete().eq('id', id).select('id').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除休假的權限。');
+      cache.leaves = cache.leaves.filter(function (l) { return l.id !== id; });
+    }).catch(function (e) { throw err(e); });
+  }
+
   /* ---------------- 異動紀錄 ---------------- */
   function getLog(limit) {
     return sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit || 300).then(chk).catch(function (e) { throw err(e); });
@@ -614,6 +730,8 @@ var API = (function () {
     saveTask: saveTask, setStatus: setStatus, previewTask: previewTask, deleteTask: deleteTask, reorderQueue: reorderQueue,
     applyTemplate: applyTemplate, bulkAdd: bulkAdd, bulkStatus: bulkStatus, saveProject: saveProject, resetBaseline: resetBaseline,
     saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
+    adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
+    saveDay: saveDay, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
     me: function () { return me; }
   };
 })();
