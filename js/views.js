@@ -191,52 +191,71 @@ function openTask(id, preset) {
   if (D.isNew) setTimeout(function () { $('#dTitle').focus(); }, 60);
 }
 function drawerBody() {
-  var t = D.cur, full = D.full, upd = D.upd;
-  var dis = function (k) { return full || (upd && ['status', 'doneQty', 'astart', 'aend', 'note'].indexOf(k) >= 0) ? '' : ' disabled'; };
-  var inp = function (k, type, extra) { return '<input class="field" name="' + k + '" type="' + (type || 'text') + '" value="' + esc(t[k]) + '"' + dis(k) + (type === 'number' ? ' step="0.5" min="0"' : '') + (extra || '') + '>'; };
-  var sel = function (k, opts) { return '<select class="field" name="' + k + '"' + dis(k) + '>' + opts.map(function (o) { var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o; return '<option value="' + esc(v) + '"' + (String(v) === String(t[k]) ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</select>'; };
+  var t = D.cur, full = D.full, isNew = D.isNew;
+  var mine = !isNew && t.owner === S.data.me.name;
+  // 進度（狀態、完成數量、實際日期）由製作人員回報；PM 只做驗收（完成、退回、暫停、取消）
+  var progEdit = !isNew && (mine || isAdmin());
+  var statusEdit = !isNew && (mine || full);
+  var inp = function (k, type, en, extra) { return '<input class="field" name="' + k + '" type="' + (type || 'text') + '" value="' + esc(t[k]) + '"' + (en ? '' : ' disabled') + (type === 'number' ? ' step="0.5" min="0"' : '') + (extra || '') + '>'; };
+  var sel = function (k, opts, en) { return '<select class="field" name="' + k + '"' + (en ? '' : ' disabled') + '>' + opts.map(function (o) { var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o; return '<option value="' + esc(v) + '"' + (String(v) === String(t[k]) ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</select>'; };
   var h = '';
-  (t.warns || []).forEach(function (w) { h += '<div class="box ' + sev(w) + '">' + esc(w) + '</div>'; });
-  if (t.info) h += '<div class="box">' + esc(t.info) + '</div>';
+  if (!isNew) {
+    (t.warns || []).forEach(function (w) { h += '<div class="box ' + sev(w) + '">' + esc(w) + '</div>'; });
+    if (t.info) h += '<div class="box">' + esc(t.info) + '</div>';
+  }
   h += '<div id="impact"></div>';
-  if (!full && upd) h += '<div class="box">你可以更新狀態、進度、實際日期和備註；其他欄位由 PM 調整。</div>';
-  var stOpts = full ? STATUSES : (['未開始', '進行中', '待驗收'].indexOf(t.status) >= 0 ? ['未開始', '進行中', '待驗收'] : [t.status, '進行中', '待驗收']);
-  h += '<div class="props">';
-  h += '<label>狀態</label><div>' + sel('status', stOpts) + '</div>';
-  h += '<label>負責</label><div>' + sel('owner', [['', '未指派']].concat(S.data.people.map(function (p) { return [p.name, p.name + (p.role !== '美術' ? '（' + p.role + '）' : '')]; }))) + '</div>';
-  if (!D.isNew) h += '<label>系統預計</label><div><b>' + md(t.start) + ' – ' + md(t.end) + '</b>' + (t.baseline ? '<span class="faint">基準 ' + md(t.baseline) + '</span>' : '') + (t.slip > 0 ? '<span class="wtag w">晚 ' + t.slip + ' 天</span>' : '') + '</div>';
-  h += '<label>天數</label><div>' + inp('days', 'number') + '</div>';
-  h += '<label>前置工項</label><div class="ac" style="display:block"><div id="predChips" style="margin-bottom:4px"></div>' + (full ? '<input class="field" id="predInput" placeholder="搜尋工項名稱或 ID，按 Enter 加入" autocomplete="off"><div class="list2 hidden" id="predList"></div>' : '') + '</div>';
-  h += '<label>前置完成後等待</label><div>' + inp('lag', 'number') + '<span class="hint" style="white-space:nowrap">工作天</span></div>';
-  h += '<label>最早開始</label><div>' + inp('earliest', 'date') + '</div>';
-  h += '<label>出版日／期限</label><div>' + inp('release', 'date') + '</div>';
-  h += '<label>排程方式</label><div>' + sel('mode', [['排隊', '排隊（佔用負責人時間，依序進行）'], ['平行', '平行（不佔用，例如監修外包）']]) + '</div>';
-  h += '<label>進度</label><div style="flex-wrap:nowrap">' + inp('doneQty', 'number') + '<span class="faint">/</span>' + inp('qty', 'number') + '</div>';
-  h += '<label>實際開始</label><div>' + inp('astart', 'date') + '</div>';
-  h += '<label>實際完成</label><div>' + inp('aend', 'date') + '</div>';
-  h += '<label>專案</label><div>' + sel('project', S.data.projects.filter(function (p) { return p.canEdit || p.id === t.project; }).map(function (p) { return [p.id, p.name]; })) + '</div>';
-  h += '<label>群組</label><div>' + inp('group', 'text', ' list="grpList"') + '<datalist id="grpList">' + Object.keys(S.data.tasks.reduce(function (m, x) { if (x.project === t.project && x.group) m[x.group] = 1; return m; }, {})).map(function (g) { return '<option value="' + esc(g) + '">'; }).join('') + '</datalist></div>';
-  h += '<label>協力（外包）</label><div>' + inp('helper') + '</div>';
-  h += '<label>標籤</label><div>' + inp('tag') + '</div>';
-  h += '<label>編號</label><div>' + inp('code') + '</div>';
-  h += '<label class="full">說明</label><div class="full"><textarea class="field" name="detail" rows="3"' + dis('detail') + '>' + esc(t.detail) + '</textarea></div>';
-  h += '<label class="full">備註</label><div class="full"><textarea class="field" name="note" rows="2"' + dis('note') + '>' + esc(t.note) + '</textarea></div>';
+
+  /* ---- 規劃（PM） ---- */
+  h += '<div class="sect"><div class="sect-h">' + (isNew ? '' : '規劃') + (!full && !isNew ? '<span class="faint">由 PM 設定</span>' : '') + '</div><div class="props">';
+  h += '<label>負責</label><div>' + sel('owner', [['', '未指派']].concat(S.data.people.map(function (p) { return [p.name, p.name + (p.role !== '美術' ? '（' + p.role + '）' : '')]; })), full) + '</div>';
+  h += '<label>天數</label><div>' + inp('days', 'number', full, ' style="max-width:120px"') + '<span class="hint">工作天，可以有小數</span></div>';
+  h += '<label>前置工項</label><div class="ac" style="display:block"><div id="predChips"></div>' + (full ? '<input class="field" id="predInput" placeholder="要先完成哪些工作？搜尋名稱或 ID" autocomplete="off" style="margin-top:4px"><div class="list2 hidden" id="predList"></div>' : '') + '</div>';
+  h += '<label>出版日／期限</label><div>' + inp('release', 'date', full, ' style="max-width:180px"') + '</div>';
+  h += '<label>群組</label><div>' + inp('group', 'text', full, ' list="grpList" placeholder="例如角色名稱或版本"') + '<datalist id="grpList">' + Object.keys(S.data.tasks.reduce(function (m, x) { if (x.project === t.project && x.group) m[x.group] = 1; return m; }, {})).map(function (g) { return '<option value="' + esc(g) + '">'; }).join('') + '</datalist></div>';
+  if (!isNew) h += '<label>系統預計</label><div><b>' + md(t.start) + ' – ' + md(t.end) + '</b>' + (t.baseline ? '<span class="faint">基準 ' + md(t.baseline) + '</span>' : '') + (t.slip > 0 ? '<span class="wtag w">晚 ' + t.slip + ' 天</span>' : '') + '</div>';
   h += '</div>';
+  h += '<details class="more"' + (D.moreOpen ? ' open' : '') + '><summary>更多設定</summary><div class="props">';
+  h += '<label>說明</label><div><textarea class="field" name="detail" rows="2"' + (full ? '' : ' disabled') + '>' + esc(t.detail) + '</textarea></div>';
+  h += '<label>最早開始</label><div>' + inp('earliest', 'date', full, ' style="max-width:180px"') + '<span class="hint">不早於這天開始</span></div>';
+  h += '<label>等前置完成後</label><div>' + inp('lag', 'number', full, ' style="max-width:120px"') + '<span class="hint">再等幾個工作天（例如審核）</span></div>';
+  h += '<label>排程方式</label><div>' + sel('mode', [['排隊', '排隊：佔用負責人時間'], ['平行', '平行：不佔用（監修外包）']], full) + '</div>';
+  h += '<label>協力（外包）</label><div>' + inp('helper', 'text', full) + '</div>';
+  h += '<label>標籤</label><div>' + inp('tag', 'text', full, ' placeholder="版本、階段"') + '</div>';
+  h += '<label>編號</label><div>' + inp('code', 'text', full) + '</div>';
+  h += '<label>數量</label><div>' + inp('qty', 'number', full, ' style="max-width:120px"') + '<span class="hint">有多張圖時填總數，方便回報進度</span></div>';
+  h += '<label>專案</label><div>' + sel('project', S.data.projects.filter(function (p) { return p.canEdit || p.id === t.project; }).map(function (p) { return [p.id, p.name]; }), full) + '</div>';
+  h += '</div></details></div>';
+
+  /* ---- 進度（製作人員） ---- */
+  if (!isNew) {
+    var stOpts = full && !mine ? STATUSES : full ? STATUSES : ['未開始', '進行中', '待驗收'].concat(['未開始', '進行中', '待驗收'].indexOf(t.status) < 0 ? [t.status] : []);
+    h += '<div class="sect"><div class="sect-h">進度' + (progEdit ? '' : '<span class="faint">由 ' + esc(t.owner || '負責人') + ' 回報</span>') + '</div><div class="props">';
+    h += '<label>狀態</label><div>' + sel('status', stOpts, statusEdit) + (full && !mine ? '<span class="hint">驗收時改成「完成」或退回「進行中」</span>' : '') + '</div>';
+    h += '<label>完成數量</label><div>' + inp('doneQty', 'number', progEdit, ' style="max-width:100px"') + '<span class="faint">/ ' + esc(t.qty || 1) + '</span></div>';
+    h += '<label>實際開始</label><div>' + inp('astart', 'date', progEdit, ' style="max-width:180px"') + (progEdit ? '<span class="hint">按「開始」會自動填今天</span>' : '') + '</div>';
+    h += '<label>實際完成</label><div>' + inp('aend', 'date', progEdit, ' style="max-width:180px"') + '</div>';
+    h += '<label>備註</label><div><textarea class="field" name="note" rows="2"' + (mine || full ? '' : ' disabled') + '>' + esc(t.note) + '</textarea></div>';
+    h += '</div></div>';
+  }
   var downs = succ[t.id] || [];
-  if (downs.length) h += '<div style="margin-top:14px;font-size:13px"><b>下游工項</b> <span class="faint">這項延誤會影響</span><div style="margin-top:6px">' + downs.map(function (s) { var x = byId[s]; return '<span class="chip" data-jump="' + esc(s) + '" style="cursor:pointer;margin-bottom:4px"><span class="d" style="background:' + (x ? ST_HEX[x.status] : '#999') + '"></span>' + esc(x ? x.title : s) + '</span>'; }).join('') + '</div></div>';
-  if (!D.isNew && t.by) h += '<div class="hint" style="margin-top:14px">最後修改：' + esc(t.by) + ' ' + esc(t.updatedAt || '') + '</div>';
+  if (downs.length) h += '<div style="margin-top:4px;font-size:13px"><b>下游工項</b> <span class="faint">這項延誤會影響</span><div style="margin-top:6px">' + downs.map(function (s) { var x = byId[s]; return '<span class="chip" data-jump="' + esc(s) + '" style="cursor:pointer;margin-bottom:4px"><span class="d" style="background:' + (x ? ST_HEX[x.status] : '#999') + '"></span>' + esc(x ? x.title : s) + '</span>'; }).join('') + '</div></div>';
+  if (!isNew && t.by) h += '<div class="hint" style="margin-top:14px">最後修改：' + esc(t.by) + ' ' + esc(t.updatedAt || '') + '</div>';
   $('#dBody').innerHTML = h;
+  var canSave = full || mine || isAdmin();
   var f = '';
-  if (upd) f += '<button class="btn primary" id="dSave">' + (D.isNew ? '建立工項' : '儲存') + '</button>';
-  if (full && !D.isNew) f += '<button class="btn" id="dNext">' + IC.plus + '新增下一步</button><button class="btn" id="dDup">複製</button><span style="flex:1"></span><button class="btn danger" id="dDel">刪除</button>';
+  if (canSave) f += '<button class="btn primary" id="dSave">' + (isNew ? '建立工項' : '儲存') + '</button>';
+  if (isNew) f += '<button class="btn" id="dSaveNext">建立並繼續新增</button>';
+  if (full && !isNew) f += '<button class="btn" id="dNext">' + IC.plus + '新增下一步</button><button class="btn" id="dDup">複製</button><span style="flex:1"></span><button class="btn danger" id="dDel">刪除</button>';
   $('#dFoot').innerHTML = f;
   renderPredChips();
   var body = $('#dBody');
+  var more = $('details.more', body); if (more) more.addEventListener('toggle', function () { D.moreOpen = more.open; });
   $$('[data-jump]', body).forEach(function (el) { el.addEventListener('click', function () { openTask(el.dataset.jump); }); });
   $$('.field', body).forEach(function (el) { el.addEventListener('change', previewSoon); });
   if (full) bindPredInput();
   var on = function (id, fn) { var el = $(id); if (el) el.addEventListener('click', fn); };
-  on('#dSave', saveDrawer);
+  on('#dSave', function () { saveDrawer(false); });
+  on('#dSaveNext', function () { saveDrawer(true); });
   on('#dDel', function () {
     if (!confirm('刪除「' + t.title + '」？刪除後無法復原。若只是不做了，建議把狀態改成「取消」。')) return;
     busy(true);
@@ -307,7 +326,7 @@ var previewSoon = debounce(function () {
     box.innerHTML = h + '</div>';
   }).catch(function (e) { if ($('#impact')) box.innerHTML = '<div class="box d">' + esc(e.message) + '</div>'; });
 }, 400);
-function saveDrawer() {
+function saveDrawer(again) {
   var o = formValues();
   if (D.full && !o.title) { toast('請填工項名稱', true); $('#dTitle').focus(); return; }
   if (!D.isNew) {
@@ -318,9 +337,13 @@ function saveDrawer() {
     return;
   }
   busy(true);
-  call('saveTask', o).then(function (r) { upsert(r.task); applyComputed(r.computed); busy(false); $('#drawer').classList.remove('open'); D.cur = null; toast('已建立「' + r.task.title + '」'); render(); }).catch(fail);
+  call('saveTask', o).then(function (r) {
+    upsert(r.task); applyComputed(r.computed); busy(false); toast('已建立「' + r.task.title + '」');
+    if (again) { openTask(null, { project: o.project, group: o.group, release: o.release, preds: '' }); render(); return; }
+    $('#drawer').classList.remove('open'); D.cur = null; render();
+  }).catch(fail);
 }
-document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'dTitle' && D.full) { e.preventDefault(); saveDrawer(); } });
+document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'dTitle' && D.full) { e.preventDefault(); saveDrawer(false); } });
 
 /* ---------------- 對話框 ---------------- */
 function modal(html) {
@@ -364,33 +387,142 @@ function openTemplate() {
   });
 }
 
+var BULK_COLS = [
+  ['group', '群組', 140, '例如 新角色A'], ['title', '工項名稱', 200, '必填'], ['owner', '負責', 110, '人員姓名'], ['days', '天數', 70, '1'],
+  ['preds', '前置', 110, '#1 或 T00123'], ['release', '出版日', 120, '2026-12-01'], ['detail', '說明', 200, '']
+];
+var BULK_HELP = '前置可以填工項 ID，或用 #1、#2 表示這次的第幾列（例如第 2 列要等第 1 列完成就填 #1）。';
 function openBulk() {
   var pid = S.route.project;
-  var h = '<h3>從 Excel 貼上</h3><div class="hint">每列一個工項，欄位依序：<b>群組、工項名稱、負責、天數、前置、出版日、說明</b>（後面的欄可以省略）。前置可以填工項 ID，或用 <b>#1</b>、<b>#2</b> 表示這次貼上的第幾列。</div>';
-  h += '<textarea class="field" id="bText" rows="8" style="width:100%;margin-top:10px;font-family:ui-monospace,Consolas,monospace" placeholder="新角色A&#9;角色設定&#9;子翔&#9;5&#10;新角色A&#9;LoRA 訓練&#9;姿晴&#9;3&#9;#1&#10;新角色A&#9;立繪&#9;韋甯&#9;5&#9;#2&#9;2026-12-01"></textarea>';
-  h += '<div id="bPrev" style="margin-top:10px"></div><div class="mfoot"><button class="btn" id="bCancel">取消</button><button class="btn primary" id="bGo" disabled>新增</button></div>';
-  modal(h);
+  var h = '<h3>批次新增工項</h3><div class="hint">直接在表格裡填，或從 Excel 複製多列後，點第一格貼上（Ctrl+V）。' + BULK_HELP + '</div>';
+  h += '<div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap"><button class="btn" id="bTpl">下載空白範本</button><label class="btn" style="cursor:pointer">匯入 Excel 檔<input type="file" id="bFile" accept=".xlsx,.xls,.csv" hidden></label><span class="grow" style="flex:1"></span><button class="btn ghost" id="bClear">清空</button></div>';
+  h += '<div class="tablewrap" style="max-height:52vh"><table class="sheet"><thead><tr><th class="rn">#</th>' + BULK_COLS.map(function (c) { return '<th style="min-width:' + c[2] + 'px">' + c[1] + (c[0] === 'title' ? ' <span style="color:var(--danger)">*</span>' : '') + '</th>'; }).join('') + '<th class="msg"></th></tr></thead><tbody id="bBody"></tbody></table></div>';
+  h += '<button class="btn ghost sm" id="bAddRow" style="margin-top:6px">' + IC.plus + '加 5 列</button>';
+  h += '<datalist id="bPeople">' + S.data.people.map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join('') + '</datalist>';
+  h += '<div class="mfoot"><span id="bSum" class="muted" style="margin-right:auto;align-self:center"></span><button class="btn" id="bCancel">取消</button><button class="btn primary" id="bGo" disabled>新增</button></div>';
+  var m = modal(h);
+  m.style.width = 'min(1100px, calc(100vw - 24px))';
   var rows = [];
-  var parse = function () {
-    var names = {}; S.data.people.forEach(function (p) { names[p.name] = 1; });
-    var bad = 0;
-    rows = $('#bText').value.split(/\r?\n/).filter(function (l) { return l.trim(); }).map(function (l) {
-      var c = l.split('\t'), rel = (c[5] || '').trim().replace(/\//g, '-'), m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(rel);
-      return { group: (c[0] || '').trim(), title: (c[1] || '').trim(), owner: (c[2] || '').trim(), days: c[3] === undefined || c[3].trim() === '' ? 1 : Number(c[3]), preds: (c[4] || '').trim(), release: m ? m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2) : rel, detail: (c[6] || '').trim() };
-    });
-    $('#bPrev').innerHTML = rows.length ? '<table><thead><tr><th>#</th><th>群組</th><th>工項</th><th>負責</th><th>天數</th><th>前置</th><th>出版日</th></tr></thead><tbody>' + rows.map(function (r, i) {
-      var err = !r.title ? '缺工項名稱' : (r.owner && !names[r.owner]) ? '名單裡沒有這個人' : isNaN(r.days) ? '天數不是數字' : (r.release && !/^\d{4}-\d{2}-\d{2}$/.test(r.release)) ? '日期格式不對' : '';
-      if (err) bad++;
-      return '<tr' + (err ? ' style="background:var(--danger-soft)"' : '') + '><td>' + (i + 1) + '</td><td>' + esc(r.group) + '</td><td>' + esc(r.title) + (err ? ' <b class="late">' + err + '</b>' : '') + '</td><td>' + esc(r.owner) + '</td><td>' + esc(r.days) + '</td><td>' + esc(r.preds) + '</td><td>' + esc(r.release) + '</td></tr>';
-    }).join('') + '</tbody></table>' : '';
-    $('#bGo').disabled = !rows.length || bad > 0;
-    $('#bGo').textContent = rows.length ? '新增 ' + rows.length + ' 個工項' : '新增';
+  for (var i = 0; i < 8; i++) rows.push({});
+  var names = {}; S.data.people.forEach(function (p) { names[p.name] = 1; });
+  var normDate = function (v) {
+    v = String(v || '').trim().replace(/\//g, '-'); if (!v) return '';
+    var mm = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v); return mm ? mm[1] + '-' + ('0' + mm[2]).slice(-2) + '-' + ('0' + mm[3]).slice(-2) : v;
   };
-  $('#bText').addEventListener('input', debounce(parse, 300));
+  var check = function (r) {
+    if (!r.title) return Object.keys(r).some(function (k) { return String(r[k] || '').trim(); }) ? '缺工項名稱' : '';
+    if (r.owner && !names[r.owner]) return '名單裡沒有「' + r.owner + '」';
+    if (r.days !== '' && r.days !== undefined && (isNaN(Number(r.days)) || Number(r.days) < 0)) return '天數要是數字';
+    if (r.release && !/^\d{4}-\d{2}-\d{2}$/.test(normDate(r.release))) return '日期格式：2026-12-01';
+    return '';
+  };
+  var draw = function () {
+    $('#bBody').innerHTML = rows.map(function (r, i) {
+      var e = check(r);
+      return '<tr' + (e ? ' class="bad"' : '') + '><td class="rn">' + (i + 1) + '</td>' + BULK_COLS.map(function (c, j) {
+        return '<td><input data-r="' + i + '" data-c="' + j + '" value="' + esc(r[c[0]] || '') + '" placeholder="' + (i === 0 ? esc(c[3]) : '') + '"' + (c[0] === 'owner' ? ' list="bPeople"' : '') + '></td>';
+      }).join('') + '<td class="msg">' + esc(e) + '</td></tr>';
+    }).join('');
+    bindCells(); summary();
+  };
+  var summary = function () {
+    var filled = rows.filter(function (r) { return r.title; }), bad = rows.filter(function (r) { return check(r); });
+    $('#bSum').textContent = filled.length ? filled.length + ' 個工項' + (bad.length ? '，' + bad.length + ' 列需要修正' : '') : '';
+    $('#bGo').disabled = !filled.length || bad.length > 0;
+    $('#bGo').textContent = filled.length ? '新增 ' + filled.length + ' 個工項' : '新增';
+  };
+  var bindCells = function () {
+    $$('#bBody input').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        var r = rows[+inp.dataset.r]; r[BULK_COLS[+inp.dataset.c][0]] = inp.value;
+        var tr = inp.closest('tr'), e = check(r); tr.classList.toggle('bad', !!e); $('.msg', tr).textContent = e; summary();
+      });
+      inp.addEventListener('paste', function (ev) {
+        var text = (ev.clipboardData || window.clipboardData).getData('text');
+        if (!/[\t\n]/.test(text)) return;
+        ev.preventDefault();
+        fill(parseTsv(text), +inp.dataset.r, +inp.dataset.c);
+      });
+      inp.addEventListener('keydown', function (ev) {
+        var r = +inp.dataset.r, c = +inp.dataset.c, go2 = null;
+        if (ev.key === 'Enter' || ev.key === 'ArrowDown') go2 = [r + 1, c];
+        if (ev.key === 'ArrowUp') go2 = [r - 1, c];
+        if (go2) { ev.preventDefault(); if (go2[0] >= rows.length) { rows.push({}); draw(); } var n = $('#bBody input[data-r="' + go2[0] + '"][data-c="' + go2[1] + '"]'); if (n) n.focus(); }
+      });
+    });
+  };
+  var parseTsv = function (text) {
+    return text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(function (l) { return l.split('\t'); });
+  };
+  var isHeader = function (cells) { return cells.some(function (v) { return /工項名稱|群組|負責/.test(String(v)); }); };
+  var fill = function (grid, r0, c0) {
+    if (grid.length && isHeader(grid[0])) grid = grid.slice(1);
+    grid.forEach(function (cells, i) {
+      var r = r0 + i; while (rows.length <= r) rows.push({});
+      cells.forEach(function (v, j) { var col = BULK_COLS[c0 + j]; if (col) rows[r][col[0]] = col[0] === 'release' ? normDate(v) : String(v).trim(); });
+    });
+    draw(); toast('已貼上 ' + grid.length + ' 列');
+  };
+  draw();
+  $('#bAddRow').addEventListener('click', function () { for (var i = 0; i < 5; i++) rows.push({}); draw(); });
+  $('#bClear').addEventListener('click', function () { rows = []; for (var i = 0; i < 8; i++) rows.push({}); draw(); });
   $('#bCancel').addEventListener('click', closeModal);
-  $('#bGo').addEventListener('click', function () {
+  $('#bTpl').addEventListener('click', function () { busy(true); need('ExcelJS').then(downloadBulkTemplate).then(function () { busy(false); }).catch(fail); });
+  $('#bFile').addEventListener('change', function (ev) {
+    var file = ev.target.files[0]; if (!file) return;
     busy(true);
-    call('bulkAdd', pid, rows).then(function (r) { r.tasks.forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已新增 ' + r.created.length + ' 個工項'); render(); }).catch(fail);
+    need('XLSX').then(function () { return file.arrayBuffer(); }).then(function (buf) {
+      var wb = XLSX.read(buf, { type: 'array' });
+      var ws = wb.Sheets['工項'] || wb.Sheets[wb.SheetNames[0]];
+      var aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', dateNF: 'yyyy-mm-dd' });
+      var hi = aoa.findIndex(isHeader);
+      if (hi < 0) throw new Error('找不到標題列，請用「下載空白範本」的格式。');
+      var head = aoa[hi].map(function (x) { return String(x).replace(/\s|\*/g, ''); });
+      var idx = BULK_COLS.map(function (c) { return head.indexOf(c[1]); });
+      var data = aoa.slice(hi + 1).filter(function (r) { return r.some(function (v) { return String(v).trim(); }); })
+        .filter(function (r) { return !/^範例/.test(String(r[idx[0]] || '')); });
+      rows = data.map(function (r) { var o = {}; BULK_COLS.forEach(function (c, j) { if (idx[j] >= 0) o[c[0]] = c[0] === 'release' ? normDate(r[idx[j]]) : String(r[idx[j]]).trim(); }); return o; });
+      if (!rows.length) rows.push({});
+      busy(false); draw(); toast('已讀入 ' + data.length + ' 列，確認後按「新增」');
+    }).catch(fail);
+    ev.target.value = '';
+  });
+  $('#bGo').addEventListener('click', function () {
+    var list = rows.filter(function (r) { return r.title; }).map(function (r) { return { group: r.group || '', title: r.title, owner: r.owner || '', days: r.days === '' || r.days === undefined ? 1 : Number(r.days), preds: r.preds || '', release: normDate(r.release), detail: r.detail || '' }; });
+    // #n 指的是表格裡的列號；空白列會被略過，所以重新對應
+    var map = {}, k = 0; rows.forEach(function (r, i) { if (r.title) map[i + 1] = ++k; });
+    list.forEach(function (r) { r.preds = split(r.preds).map(function (x) { var mm = /^#(\d+)$/.exec(x); return mm ? (map[mm[1]] ? '#' + map[mm[1]] : x) : x; }).join(', '); });
+    busy(true);
+    call('bulkAdd', pid, list).then(function (r) { r.tasks.forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已新增 ' + r.created.length + ' 個工項'); render(); }).catch(fail);
+  });
+}
+function downloadBulkTemplate() {
+  var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('工項'), ps = wb.addWorksheet('人員名單');
+  ws.columns = BULK_COLS.map(function (c) { return { header: c[1] + (c[0] === 'title' ? ' *' : ''), key: c[0], width: Math.round(c[2] / 7) }; });
+  var hr = ws.getRow(1);
+  hr.eachCell(function (c) { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF5B5BD6' } }; c.alignment = { vertical: 'middle' }; });
+  hr.height = 22;
+  [['範例：新角色A', '角色設定', S.data.people[0] ? S.data.people[0].name : '', 5, '', '', '這兩列範例匯入時會自動略過，可以刪掉'],
+   ['範例：新角色A', '立繪', '', 5, '#1', '2026-12-01', '前置 #1 = 要等第 1 列完成']].forEach(function (r) {
+    var row = ws.addRow(r); row.eachCell(function (c) { c.font = { italic: true, color: { argb: 'FF9396AA' } }; });
+  });
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  ps.columns = [{ header: '姓名', key: 'n', width: 16 }, { header: '角色', key: 'r', width: 10 }];
+  ps.getRow(1).font = { bold: true };
+  S.data.people.forEach(function (p) { ps.addRow([p.name, p.role]); });
+  var n = S.data.people.length + 1;
+  for (var r = 2; r <= 500; r++) {
+    ws.getCell('C' + r).dataValidation = { type: 'list', allowBlank: true, formulae: ['人員名單!$A$2:$A$' + n], showErrorMessage: true, errorTitle: '名單裡沒有這個人', error: '請從下拉選單選擇，或先請管理員新增人員。' };
+    ws.getCell('D' + r).dataValidation = { type: 'decimal', operator: 'greaterThanOrEqual', allowBlank: true, formulae: [0], showErrorMessage: true, error: '天數要是 0 以上的數字' };
+  }
+  var note = wb.addWorksheet('說明');
+  [['欄位', '說明'], ['群組', '工項表上的分組，例如角色名稱或版本'], ['工項名稱', '必填'], ['負責', '從下拉選單選人員；可以空白之後再指派'], ['天數', '工作天，可以有小數（0.5）；空白 = 1'],
+   ['前置', '要先完成的工作：填工項 ID（例如 T00123），或 #1、#2 表示這份檔案的第幾個工項；多個用逗號分隔'], ['出版日', '期限，格式 2026-12-01'], ['說明', '選填']].forEach(function (r, i) { var row = note.addRow(r); if (!i) row.font = { bold: true }; });
+  note.getColumn(1).width = 12; note.getColumn(2).width = 90;
+  return wb.xlsx.writeBuffer().then(function (buf) {
+    var url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    var a = document.createElement('a'); a.href = url; a.download = '批次新增工項_範本.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
   });
 }
 
@@ -681,7 +813,7 @@ function setLog(box) {
 /* ---------------- 其他人修改時自動更新 ---------------- */
 API.onChange(function (ev) {
   if (!S.data) return;
-  if (ev.reload) { load(S.data.history); return; }
+  if (ev.reload || S.preview) { if (!isEditing()) load(S.data.history); return; }
   ev.removed.forEach(function (id) { S.data.tasks = S.data.tasks.filter(function (t) { return t.id !== id; }); });
   ev.tasks.forEach(upsert);
   index(); applyComputed(ev.computed);

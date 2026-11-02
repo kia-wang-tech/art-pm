@@ -20,8 +20,12 @@ function toast(msg, err) {
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
+var WRITE_FNS = { saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
+  saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
+var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
+  if (S.preview && WRITE_FNS[fn]) return Promise.reject(new Error(PREVIEW_MSG));
   try { return Promise.resolve(API[fn].apply(API, args)); } catch (e) { return Promise.reject(e); }
 }
 var LIBS = { ExcelJS: 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js', XLSX: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' };
@@ -50,6 +54,7 @@ var IC = {
   auto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v18" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   filter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg>'
 };
 
@@ -109,6 +114,7 @@ function battery(ts) {
 var syncChain = Promise.resolve(), syncCount = 0;
 function syncUi() { var el = $('#sync'); if (el) el.classList.toggle('hidden', !syncCount); }
 function saveLater(id, patch, fn, okMsg) {
+  if (S.preview) { toast(PREVIEW_MSG, true); return; }
   var t = byId[id], backup = {};
   Object.keys(patch).forEach(function (k) { backup[k] = t[k]; t[k] = patch[k]; });
   syncCount++; syncUi(); render();
@@ -153,11 +159,58 @@ function cycleTheme() {
 function load(history) {
   busy(true);
   return call('getData', { history: !!history }).then(function (d) {
-    S.data = d; index();
+    S.realData = d;
+    S.data = S.preview ? previewData(d, S.preview) : d; index();
     var names = d.people.map(function (p) { return p.name; });
     if (!S.minePerson || names.indexOf(S.minePerson) < 0) S.minePerson = names.indexOf(d.me.name) >= 0 ? d.me.name : (names[0] || '');
     busy(false); renderShell(); render();
   }).catch(fail);
+}
+
+/* ---------------- 以其他人的視角預覽（管理員） ---------------- */
+function previewData(d, who) {
+  var scope = (API.adminData().settings.filter(function (x) { return x.key === '美術可見範圍'; })[0] || {}).value || '全部';
+  var me = { name: who.name, role: who.role, email: who.email || '' };
+  var canEditP = function (p) {
+    if (me.role === '管理員') return true;
+    if (me.role !== 'PM' || p.status === '封存') return false;
+    var pms = String(p.pm || '').split(/\s*[,，、;；]\s*/).filter(Boolean);
+    return !pms.length || pms.indexOf(me.name) >= 0 || (me.email && pms.map(function (x) { return x.toLowerCase(); }).indexOf(me.email) >= 0);
+  };
+  var tasks = d.tasks, projects = d.projects;
+  if (me.role === '美術' && scope !== '全部') {
+    var mine = {}; tasks.forEach(function (t) { if (t.owner === me.name) mine[t.project] = 1; });
+    projects = projects.filter(function (p) { return mine[p.id]; });
+    tasks = scope === '自己的工項' ? tasks.filter(function (t) { return t.owner === me.name; }) : tasks.filter(function (t) { return mine[t.project]; });
+  }
+  return Object.assign({}, d, {
+    me: me, tasks: tasks, sheetUrl: '',
+    projects: projects.map(function (p) { return Object.assign({}, p, { canEdit: canEditP(p) }); }),
+    people: d.people.map(function (p) { return { name: p.name, role: p.role, alias: p.alias }; })
+  });
+}
+function startPreview(who) {
+  S.preview = who; S.minePerson = who.name; S.picked = {};
+  S.data = previewData(S.realData, who); index(); renderShell(); go('mine');
+  toast('現在是「' + who.name + '」看到的畫面');
+}
+function endPreview() {
+  S.preview = null; S.data = S.realData; index(); S.minePerson = S.data.me.name; renderShell(); render();
+}
+function openPreviewPicker() {
+  var people = API.adminData().people.filter(function (p) { return p.active; });
+  var h = '<h3>以其他人的視角預覽</h3><p class="muted" style="margin:0 0 12px;font-size:13px">看看某位同仁登入後看到的畫面和能做的操作。預覽時只能看，不會修改任何資料。</p>';
+  h += '<div class="form"><label class="full">人員<select class="field" id="pvWho" style="max-width:none">' + ['美術', 'PM'].map(function (r) {
+    return '<optgroup label="' + r + '">' + people.filter(function (p) { return p.role === r; }).map(function (p) { return '<option value="' + esc(p.name) + '">' + esc(p.name) + (p.email ? '' : '（還沒填 Email）') + '</option>'; }).join('') + '</optgroup>';
+  }).join('') + '</select></label></div>';
+  h += '<div class="mfoot"><button class="btn" id="pvC">取消</button><button class="btn primary" id="pvGo">開始預覽</button></div>';
+  modal(h);
+  $('#pvC').addEventListener('click', closeModal);
+  $('#pvGo').addEventListener('click', function () {
+    var p = people.filter(function (x) { return x.name === $('#pvWho').value; })[0];
+    if (!p) return;
+    closeModal(); startPreview({ name: p.name, role: p.role, email: p.email });
+  });
 }
 
 /* ---------------- 外框 ---------------- */
@@ -167,13 +220,17 @@ function renderShell() {
     '<div class="app">' +
     '<aside class="side"><div class="brand"><span class="mark">' + IC.gantt + '</span>美術專案管理</div><nav class="nav" id="nav"></nav>' +
     '<div class="side-foot">' + avatar(d.me.name) + '<div class="who"><b>' + esc(d.me.name) + '</b><span>' + esc(d.me.role) + '</span></div>' +
+    ((S.realData && S.realData.me.role === '管理員' && !S.preview) ? '<button class="btn ghost icon" id="pvBtn" title="以其他人的視角預覽">' + IC.eye + '</button>' : '') +
     '<button class="btn ghost icon" id="themeBtn"></button><button class="btn ghost icon" id="logoutBtn" title="登出">' + IC.logout + '</button></div></aside>' +
-    '<section class="main"><div class="top"><button class="btn ghost icon menu-btn" id="menuBtn" title="選單">' + IC.menu + '</button><h1 id="title"></h1><span class="grow"></span>' +
+    '<section class="main">' + (S.preview ? '<div class="pvbar"><span>' + IC.eye + '正在以「<b>' + esc(d.me.name) + '</b>（' + esc(d.me.role) + '）」的視角預覽，只能看不能改。</span><span class="grow"></span><button class="btn sm" id="pvSwitch">換一個人</button><button class="btn sm primary" id="pvEnd">結束預覽</button></div>' : '') + '<div class="top"><button class="btn ghost icon menu-btn" id="menuBtn" title="選單">' + IC.menu + '</button><h1 id="title"></h1><span class="grow"></span>' +
     '<span class="sync hidden" id="sync">同步中</span><button class="btn ghost icon" id="reloadBtn" title="重新整理">' + IC.refresh + '</button><span id="topActions"></span></div>' +
     '<div class="views hidden" id="views"></div><div class="content" id="content"></div></section></div>';
   var t = theme(); $('#themeBtn').innerHTML = IC[t === 'auto' ? 'auto' : t === 'light' ? 'sun' : 'moon'];
   $('#themeBtn').title = { auto: '主題：跟隨系統', light: '主題：淺色', dark: '主題：深色' }[t];
   $('#themeBtn').addEventListener('click', cycleTheme);
+  var pv = $('#pvBtn'); if (pv) pv.addEventListener('click', openPreviewPicker);
+  var pe = $('#pvEnd'); if (pe) pe.addEventListener('click', endPreview);
+  var ps = $('#pvSwitch'); if (ps) ps.addEventListener('click', openPreviewPicker);
   $('#logoutBtn').addEventListener('click', function () { API.signOut(); });
   $('#reloadBtn').addEventListener('click', function () { load(S.data.history); });
   $('#menuBtn').addEventListener('click', function () { $('.app').classList.toggle('nav-open'); });
@@ -264,7 +321,7 @@ function projectHeader(p, view) {
   setViews('<a href="#/p/' + encodeURIComponent(p.id) + '" class="' + (view === 'board' ? 'on' : '') + '">' + '<span style="width:16px;height:16px;display:inline-flex">' + IC.board + '</span>主表格</a>' +
     '<a href="#/p/' + encodeURIComponent(p.id) + '/gantt" class="' + (view === 'gantt' ? 'on' : '') + '"><span style="width:16px;height:16px;display:inline-flex">' + IC.gantt + '</span>甘特圖</a>');
   var acts = '';
-  if (p.canEdit) acts += '<button class="btn" id="tplBtn">套用範本</button> <button class="btn hide-m" id="bulkBtn">從 Excel 貼上</button> <button class="btn ghost icon" id="projBtn" title="專案設定">' + IC.settings + '</button> <button class="btn primary" id="addTask">' + IC.plus + '新增工項</button>';
+  if (p.canEdit) acts += '<button class="btn" id="tplBtn">套用範本</button> <button class="btn hide-m" id="bulkBtn">批次新增</button> <button class="btn ghost icon" id="projBtn" title="專案設定">' + IC.settings + '</button> <button class="btn primary" id="addTask">' + IC.plus + '新增工項</button>';
   setActions(acts);
   var on = function (id, fn) { var el = $(id); if (el) el.addEventListener('click', fn); };
   on('#addTask', function () { openTask(null, { project: p.id }); });

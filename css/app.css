@@ -406,3 +406,32 @@ svg.arrows path.tmp { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4;
   .props { grid-template-columns: 96px 1fr; }
   .hide-m { display: none !important; }
 }
+
+/* 工項面板分區 */
+.sect { margin-bottom: 16px; }
+.sect-h { font-size: 13px; font-weight: 700; color: var(--ink); margin: 2px 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.sect-h:empty { display: none; }
+.sect-h .faint { font-weight: 400; font-size: 12px; }
+.props .field:disabled { background: transparent; border-color: transparent; color: var(--ink); opacity: 1; padding-left: 0; -webkit-text-fill-color: var(--ink); }
+.props select.field:disabled { appearance: none; }
+details.more { margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 6px; }
+details.more summary { cursor: pointer; color: var(--accent); font-size: 13px; padding: 6px 0; list-style: none; }
+details.more summary::-webkit-details-marker { display: none; }
+details.more summary::before { content: "＋ "; }
+details.more[open] summary::before { content: "－ "; }
+.props .hint { white-space: nowrap; }
+
+/* 批次新增表格 */
+table.sheet { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.sheet th { position: sticky; top: 0; background: var(--surface2); border-bottom: 1px solid var(--line); border-right: 1px solid var(--line2); padding: 6px 8px; text-align: left; font-weight: 600; color: var(--ink2); z-index: 1; white-space: nowrap; }
+table.sheet td { border-bottom: 1px solid var(--line2); border-right: 1px solid var(--line2); padding: 0; }
+table.sheet td input { width: 100%; border: 0; background: transparent; height: 32px; padding: 0 8px; }
+table.sheet td input:focus { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--surface); }
+table.sheet .rn { width: 36px; text-align: center; color: var(--ink3); background: var(--surface2); }
+table.sheet .msg { min-width: 170px; color: var(--danger); font-size: 12px; padding: 0 8px; white-space: normal; line-height: 1.3; border-right: 0; }
+table.sheet tr.bad td { background: var(--danger-soft); }
+
+/* 預覽列 */
+.pvbar { display: flex; align-items: center; gap: 8px; padding: 8px 22px; background: var(--warn-soft); color: var(--ink); border-bottom: 1px solid var(--line); font-size: 13px; flex-wrap: wrap; }
+.pvbar svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; color: var(--warn); }
+.pvbar .grow { flex: 1; }
