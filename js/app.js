@@ -40,6 +40,7 @@ function need(name) {
 
 var IC = {
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>',
+  help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h8"/></svg>',
@@ -142,6 +143,7 @@ function parseRoute() {
   if (h[0] === 'mine') return { view: 'mine', person: h[1] ? decodeURIComponent(h[1]) : '' };
   if (h[0] === 'people') return { view: 'people' };
   if (h[0] === 'settings') return { view: 'settings', tab: h[1] || '' };
+  if (h[0] === 'help') return { view: 'help', tab: h[1] ? decodeURIComponent(h[1]) : '' };
   return { view: 'home' };
 }
 function go(path) { if (location.hash === '#/' + path) render(); else location.hash = '#/' + path; }
@@ -250,7 +252,9 @@ function renderNav() {
     var on = (r.view === 'board' || r.view === 'gantt') && r.project === p.id;
     h += '<a href="#/p/' + encodeURIComponent(p.id) + '" class="' + (on ? 'on ' : '') + (p.status === '封存' ? 'archived' : '') + '"><span class="dot" style="background:' + pcolor(p.id) + '"></span><span class="pnm">' + esc(p.name) + '</span></a>';
   });
-  if (isPM()) h += '<div class="sec"><span>管理</span></div><a href="#/settings" class="' + (r.view === 'settings' ? 'on' : '') + '"><span class="ic">' + IC.settings + '</span>設定</a>';
+  h += '<div class="sec"><span>' + (isPM() ? '管理' : '其他') + '</span></div>';
+  if (isPM()) h += '<a href="#/settings" class="' + (r.view === 'settings' ? 'on' : '') + '"><span class="ic">' + IC.settings + '</span>設定</a>';
+  h += '<a href="#/help" class="' + (r.view === 'help' ? 'on' : '') + '"><span class="ic">' + IC.help + '</span>使用說明</a>';
   $('#nav').innerHTML = h;
   var np = $('#navNewProj'); if (np) np.addEventListener('click', function () { openProject(null); });
 }
@@ -268,7 +272,7 @@ function render() {
   var r = S.route;
   if ((r.view === 'board' || r.view === 'gantt') && !projById[r.project]) { r.view = 'home'; }
   if (r.view === 'settings' && !isPM()) r.view = 'home';
-  ({ home: renderHome, board: renderBoard, gantt: renderGantt, people: renderPeople, mine: renderMine, settings: renderSettings })[r.view](c);
+  ({ home: renderHome, board: renderBoard, gantt: renderGantt, people: renderPeople, mine: renderMine, settings: renderSettings, help: renderHelp })[r.view](c);
   syncUi();
 }
 

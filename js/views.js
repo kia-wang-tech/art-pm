@@ -759,7 +759,7 @@ function setPeople(box) {
   var list = d.people.filter(function (p) { return (showOff || p.active) && (!q || (p.name + ' ' + p.email + ' ' + p.alias).toLowerCase().indexOf(q) >= 0); });
   var noEmail = d.people.filter(function (p) { return p.active && !p.email; }).length;
   var h = ro() + '<div class="toolbar" style="padding:0 0 12px"><span class="search">' + IC.search + '<input type="search" class="field" id="ppQ" placeholder="搜尋姓名、Email" value="' + esc(S.peopleQ || '') + '"></span><label class="chk"><input type="checkbox" id="ppOff"' + (showOff ? ' checked' : '') + '>顯示已離職</label><span class="grow"></span>' +
-    (noEmail ? '<span class="wtag w">' + noEmail + ' 位在職人員還沒填 Email，還不能登入</span>' : '') + '</div>';
+    (noEmail ? '<span class="wtag w">' + noEmail + ' 位在職人員還沒填 Email，還不能登入</span>' : '') + (admin ? '<button class="btn" id="ppBulk">批次貼上 Email</button>' : '') + '</div>';
   h += '<div class="tablewrap" style="max-height:calc(100vh - 250px)"><table class="grid2" style="min-width:880px"><thead><tr><th>姓名</th><th>Email（公司 Google 帳號）</th><th style="width:110px">角色</th><th>別名</th><th style="width:50px">在職</th><th>備註</th><th style="width:56px">工項</th><th style="width:130px"></th></tr></thead><tbody>';
   if (admin) h += '<tr style="background:var(--accent-soft)"><td><input class="field" id="npName" placeholder="新人員姓名"></td><td><input class="field" id="npEmail" placeholder="name@公司網域"></td><td>' + roleSel('npRole', '美術') + '</td><td><input class="field" id="npAlias"></td><td></td><td><input class="field" id="npNote"></td><td></td><td><button class="btn sm primary" id="npAdd">新增</button></td></tr>';
   list.forEach(function (p, i) {
@@ -773,6 +773,7 @@ function setPeople(box) {
   box.innerHTML = h;
   $('#ppQ').addEventListener('input', debounce(function (e) { S.peopleQ = e.target.value; setPeople(box); var n = $('#ppQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250));
   $('#ppOff').addEventListener('change', function (e) { S.peopleOff = e.target.checked; setPeople(box); });
+  if ($('#ppBulk')) $('#ppBulk').addEventListener('click', function () { openEmailPaste(box); });
   if (!admin) return;
   $$('tr[data-pi]', box).forEach(function (tr) {
     var p = list[+tr.dataset.pi], cur = { email: p.email || '', role: p.role, alias: p.alias || '', active: !!p.active, note: p.note || '' };
@@ -816,6 +817,81 @@ function setPeople(box) {
   $('#npAdd').addEventListener('click', function () {
     var o = { name: $('#npName').value, email: $('#npEmail').value, role: $('#npRole').value, alias: $('#npAlias').value, note: $('#npNote').value, active: true };
     busy(true); call('savePerson', null, o).then(function () { busy(false); adminRefresh(); toast('已新增：' + o.name); setPeople(box); }).catch(fail);
+  });
+}
+
+/* 批次貼上 Email：每行一人，姓名和 Email 用 Tab、逗號或空白分開（可直接從 Excel、通訊錄複製） */
+function openEmailPaste(box) {
+  var d = API.adminData(), people = d.people.slice().sort(function (a, b) { return b.name.length - a.name.length; });
+  var h = '<h3>批次貼上 Email</h3><div class="hint">每行一個人：姓名和 Email（可以直接從 Excel 或公司通訊錄複製兩欄貼上）。姓名可以是全名，例如「王小明」會自動對應到名單上的「小明」。也可以加第三欄角色（美術、PM、管理員）。</div>' +
+    '<textarea class="field" id="epText" rows="7" style="width:100%;margin-top:10px;font-family:inherit" placeholder="王小明\txiaoming@公司網域\n陳柏宇, boyu@公司網域, PM"></textarea>' +
+    '<div id="epPrev" style="margin-top:10px"></div>' +
+    '<div class="mfoot"><span id="epSum" class="muted" style="margin-right:auto"></span><button class="btn" id="epC">關閉</button><button class="btn primary" id="epGo" disabled>套用</button></div>';
+  modal(h);
+  var rows = [];
+  function guess(text) {
+    var t = text.replace(/\s+/g, '');
+    var exact = people.filter(function (p) { return p.name === t || (p.alias && p.alias === t); });
+    if (exact.length) return exact[0].name;
+    var hits = people.filter(function (p) { return t.indexOf(p.name) >= 0 || (p.alias && t.indexOf(p.alias) >= 0) || (p.alias && p.alias.indexOf(t) >= 0 && t.length >= 2); });
+    return hits.length === 1 ? hits[0].name : (hits.length > 1 ? '?' + hits.map(function (p) { return p.name; }).join('|') : '');
+  }
+  function parse() {
+    rows = [];
+    $('#epText').value.split(/\r?\n/).forEach(function (line) {
+      if (!line.trim()) return;
+      var m = line.match(/[^\s<>,;，；"']+@[^\s<>,;，；"']+/);
+      var email = m ? m[0].toLowerCase() : '';
+      var rest = line.replace(m ? m[0] : '', ' ').split(/[\t,，;；<>"]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var role = '', nameTxt = '';
+      rest.forEach(function (x) { if (/^(美術|PM|管理員)$/i.test(x)) role = x.toUpperCase() === 'PM' ? 'PM' : x; else if (!nameTxt) nameTxt = x; });
+      var g = guess(nameTxt), cands = g.charAt(0) === '?' ? g.slice(1).split('|') : [];
+      rows.push({ text: nameTxt, email: email, role: role, name: cands.length ? '' : g, cands: cands });
+    });
+    draw();
+  }
+  function check(r) {
+    if (!r.email) return ['err', '沒有 Email'];
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email)) return ['err', 'Email 格式不正確'];
+    if (!r.name) return ['err', r.cands.length ? '請選擇是哪一位' : '名單上找不到這個人'];
+    var dupPaste = rows.filter(function (x) { return x.email === r.email; }).length > 1 || rows.filter(function (x) { return x.name === r.name; }).length > 1;
+    if (dupPaste) return ['err', '貼上的資料裡重複'];
+    var other = d.people.filter(function (p) { return p.email === r.email && p.name !== r.name; })[0];
+    if (other) return ['err', '這個 Email 已經是「' + other.name + '」的'];
+    var p = d.people.filter(function (x) { return x.name === r.name; })[0];
+    if (p.email === r.email && (!r.role || r.role === p.role)) return ['same', '沒有變更'];
+    return ['ok', p.email ? '更新（原本 ' + p.email + '）' : '新增 Email'];
+  }
+  function draw() {
+    var ok = 0, opts = function (r) {
+      var list = r.cands.length ? r.cands : d.people.map(function (p) { return p.name; });
+      return '<option value="">— 選擇人員 —</option>' + list.map(function (n) { return '<option' + (n === r.name ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('');
+    };
+    var h = rows.length ? '<div style="max-height:300px;overflow:auto"><table class="grid2"><thead><tr><th>貼上的姓名</th><th>對應人員</th><th>Email</th><th>角色</th><th>結果</th></tr></thead><tbody>' + rows.map(function (r, i) {
+      var c = check(r); if (c[0] === 'ok') ok++;
+      return '<tr><td>' + esc(r.text) + '</td><td><select class="field" data-ep="' + i + '" style="min-width:110px">' + opts(r) + '</select></td><td>' + esc(r.email) + '</td><td>' + esc(r.role || '（不變）') + '</td><td><span class="' + (c[0] === 'err' ? 'wtag d' : c[0] === 'ok' ? 'wtag ok' : 'faint') + '">' + esc(c[1]) + '</span></td></tr>';
+    }).join('') + '</tbody></table></div>' : '';
+    $('#epPrev').innerHTML = h;
+    $('#epSum').textContent = rows.length ? '共 ' + rows.length + ' 行，' + ok + ' 筆會更新' : '';
+    $('#epGo').disabled = !ok;
+    $$('[data-ep]').forEach(function (sel) { sel.addEventListener('change', function () { rows[+sel.dataset.ep].name = sel.value; draw(); }); });
+  }
+  $('#epText').addEventListener('input', debounce(parse, 300));
+  $('#epC').addEventListener('click', closeModal);
+  $('#epGo').addEventListener('click', function () {
+    var todo = rows.filter(function (r) { return check(r)[0] === 'ok'; }), done = 0, failed = [];
+    busy(true);
+    todo.reduce(function (pr, r) {
+      return pr.then(function () {
+        var p = d.people.filter(function (x) { return x.name === r.name; })[0];
+        return call('savePerson', p.name, { email: r.email, role: r.role || p.role, alias: p.alias, active: p.active, note: p.note })
+          .then(function () { done++; }, function (e) { failed.push(r.name + '：' + ((e && e.message) || e)); });
+      });
+    }, Promise.resolve()).then(function () {
+      busy(false); adminRefresh();
+      if (failed.length) toast('已更新 ' + done + ' 人；' + failed.length + ' 人失敗：' + failed.join('、'), true); else toast('已更新 ' + done + ' 人的 Email');
+      closeModal(); setPeople(box);
+    });
   });
 }
 
@@ -966,3 +1042,46 @@ API.init().then(function (r) {
   S.route = parseRoute();
   load(false);
 }).catch(function (e) { gate('<h2>連線失敗</h2><p class="muted">' + esc(e.message) + '</p><button class="btn" onclick="location.reload()">重新整理</button>'); });
+
+/* ---------------- 使用說明 ---------------- */
+var HELP = {
+  '美術': [
+    ['登入', ['用<b>公司 Google 帳號</b>登入。看到「沒有使用權限」時，請管理員在人員名單填上你的 Email。', '手機也能用，介面會自動調整。左下角的半圓圖示可以切換淺色、深色主題。']],
+    ['每天要做的事：在「我的工作」回報進度', ['左側點「<b>我的工作</b>」，你的工作會分成：<b>進行中</b>、<b>可以開始</b>（前置都完成了）、<b>等待前置</b>（還在等別人）、<b>已送驗收</b>。', '開始做某項工作 → 按卡片上的「<b>開始</b>」。系統會自動記下實際開始日。', '做完 → 按「<b>送驗收</b>」。系統會記下實際完成日，PM 確認後會變成「完成」；如果被退回，會回到「進行中」。', '一次只開始你真的在做的工作，排程才會準。']],
+    ['需要補充或修正時', ['點卡片上的「<b>詳細</b>」打開工項面板，在「進度」區可以改：狀態、完成數量、實際開始、實際完成、備註。', '<b>有數量的工項</b>（例如 10 張立繪）：做了幾張就填「完成數量」，系統會用剩下的量重新推算完成日。', '忘了按開始或日期記錯，直接改實際日期，順便在備註寫原因。', '工項名稱、天數、負責人、前置這些由 PM 安排，你這邊會是唯讀；有問題請找 PM。']],
+    ['預計日期是怎麼來的？', ['你<b>不用</b>自己填預計日期。系統會依天數、你的排隊順序、前置工項、假日和休假自動計算，任何人改了東西都會即時重算。', '別人的修改會即時出現在你的畫面上，不用重新整理。']],
+    ['工項上的警示', ['<span class="wtag d">超過出版日</span>：照目前進度會趕不上期限。', '<span class="wtag w">進度落後</span>：已經過了預計完成日還沒送驗收。', '<span class="wtag w">比基準晚</span>：比 PM 一開始規劃的完成日晚。', '看到警示不用緊張，PM 也看得到，必要時會調整排程。']],
+    ['查看全部排程', ['「<b>人員排程</b>」：用時間軸看每個人接下來的工作和休假。', '左側「<b>專案</b>」：看整個專案的工項表格和甘特圖。上方的年度選單可以切換考核年度。']],
+    ['寫自評：下載年度工作排程', ['「我的工作」右上角按「<b>下載年度工作</b>」，選年度後下載 Excel。', '按月份列出你這段期間參與的所有工項（包含已封存的），格式和以前的個人排程表一樣。']]
+  ],
+  'PM': [
+    ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。']],
+    ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、負責、天數；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。']],
+    ['在表格上編輯', ['直接點負責、狀態、天數、前置、出版日的格子就能改，存檔是自動的。', '勾選多筆後，下方會出現批次列：改狀態、指派給、刪除。', '上方可以篩選負責人、群組、狀態、「只看有警示」，也可以切換考核年度。']],
+    ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '同一個人的工作順序：「人員排程」點人名，用上下箭頭調整排隊順序。']],
+    ['驗收', ['美術送驗收後，你的「我的工作」最上面會出現「<b>等你驗收</b>」，側欄也會顯示數字。', '確認沒問題按「確認完成」；需要修改按「退回修改」，工項會回到進行中。']],
+    ['休假與人力', ['「人員排程」右上「<b>登記休假</b>」，休假期間不會排工作，後面的工作會自動往後推。', '「下載個人排程表」可以一次下載所有人的排程 Excel，也能快速選考核年度。']],
+    ['每天花一分鐘看首頁', ['首頁會列出各專案進度、所有警示，以及七天內預計完成的工項。']]
+  ],
+  '管理員': [
+    ['人員', ['「設定 → 人員」：修改後離開欄位就自動儲存。', '<b>批次貼上 Email</b>：從公司通訊錄或 Excel 複製「姓名、Email」兩欄貼上，全名會自動對應到名單上的名字。也可以加第三欄角色。', '角色：<b>美術</b>只能更新自己的工項；<b>PM</b>可以排程；<b>管理員</b>全部權限。專案設定裡可以指定某專案只有哪幾位 PM 能改。', '離職的人取消勾選「在職」，歷史工項會保留。']],
+    ['一般設定', ['管理員 Email 名單、美術可以看到哪些工項（全部、自己有工項的專案、只有自己的）。']],
+    ['行事曆與範本', ['「行事曆」：國定假日、公司活動、補班日。每年年底記得加入隔年的假日。', '「範本」：維護常用流程與相依。']],
+    ['考核年度與封存', ['「年度封存」：設定考核年度從幾月開始。改月份時，下一個年度會接著上次封存的結束日。', '每年考核結束後，由舊到新封存上一年度；資料不會刪除，可以隨時解除封存。']],
+    ['備份與還原', ['每天凌晨 2:30 會自動備份到私人的 GitHub repo，保留 30 天。', '還原：下載備份 xlsx，在「匯入與還原」匯入。<b>匯入會整份取代現有資料</b>，請小心使用。']],
+    ['用別人的視角檢查', ['左下角的眼睛按鈕可以用某位同事的身分預覽網站（只能看不能改），方便確認他看到的畫面。']],
+    ['出問題時', ['「修改紀錄」可以查誰在什麼時候改了什麼。', '系統帳號（Supabase、GitHub、Google 登入設定）的位置和救援方式，請看「系統交接清單」。']]
+  ]
+};
+function renderHelp(c) {
+  var tabs = ['美術', 'PM'].concat(isAdmin() ? ['管理員'] : []);
+  var tab = tabs.indexOf(S.route.tab) >= 0 ? S.route.tab : (S.helpTab && tabs.indexOf(S.helpTab) >= 0 ? S.helpTab : (isAdmin() ? '管理員' : isPM() ? 'PM' : '美術'));
+  setTitle('<span class="t">使用說明</span>');
+  var h = '<div class="subtabs">' + tabs.map(function (t) { return '<button data-ht="' + t + '" class="' + (t === tab ? 'on' : '') + '">' + t + (t === '管理員' ? '' : '版') + '</button>'; }).join('') + '</div><div class="help">';
+  HELP[tab].forEach(function (sec, i) {
+    h += '<section class="card pad"><h3><span class="hn">' + (i + 1) + '</span>' + sec[0] + '</h3><ul>' + sec[1].map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></section>';
+  });
+  h += '</div>';
+  c.innerHTML = h;
+  $$('[data-ht]', c).forEach(function (b) { b.addEventListener('click', function () { S.helpTab = b.dataset.ht; render(); }); });
+}
