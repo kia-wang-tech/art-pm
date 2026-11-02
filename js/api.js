@@ -29,16 +29,16 @@ var API = (function () {
 
   var T_MAP = { id: 'id', project: 'project', group: 'grp', code: 'code', tag: 'tag', title: 'title', detail: 'detail', owner: 'owner',
     helper: 'helper', mode: 'mode', prio: 'prio', days: 'days', preds: 'preds', lag: 'lag', earliest: 'earliest', release: 'release',
-    status: 'status', doneQty: 'done_qty', qty: 'qty', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note' };
+    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note' };
   var T_DATES = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1 };
-  var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1 };
+  var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1, pct: 1 };
 
   function fromDb(r) {
     return {
       id: r.id, project: r.project, group: r.grp || '', code: r.code || '', tag: r.tag || '', title: r.title, detail: r.detail || '',
       owner: r.owner || '', helper: r.helper || '', mode: r.mode, prio: num(r.prio, ''), days: num(r.days, 0), preds: r.preds || '',
       lag: num(r.lag, 0), earliest: r.earliest || '', release: r.release || '', status: r.status, doneQty: num(r.done_qty, 0),
-      qty: num(r.qty, 1), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', src: r.src || '',
+      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', src: r.src || '',
       by: r.updated_by || '', updatedAt: r.updated_at ? new Date(new Date(r.updated_at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '',
       at: r.version, version: r.version, archived: r.archived || ''
     };
@@ -49,7 +49,7 @@ var API = (function () {
       if (!(k in o) || k === 'id') return;
       var v = o[k];
       if (T_DATES[k]) v = dOrNull(v);
-      else if (T_NUMS[k]) v = (v === '' || v === null || v === undefined) ? (k === 'prio' ? null : 0) : Number(v);
+      else if (T_NUMS[k]) v = (v === '' || v === null || v === undefined) ? ((k === 'prio' || k === 'pct') ? null : 0) : Number(v);
       else v = v === null || v === undefined ? '' : String(v);
       r[T_MAP[k]] = v;
     });
@@ -82,15 +82,15 @@ var API = (function () {
   }
   function decorate(t) {
     var r = cache.out && cache.out.result[t.id];
-    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; }
-    else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; }
+    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; }
+    else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; t.expect = undefined; }
     return t;
   }
   /** 給畫面用的複本：畫面上的樂觀更新不會動到這裡的資料，存檔時才比得出差異 */
   function view(t) { return decorate(copyTask(t)); }
   function computedMap() {
     var m = {};
-    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '']; });
+    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect]; });
     return m;
   }
   function putTask(t) {
@@ -442,6 +442,22 @@ var API = (function () {
     }).catch(function (e) { throw err(e); });
   }
 
+  /* 設定某位 PM 管理哪些專案（寫回各專案的 PM 欄） */
+  function setManagedProjects(name, ids) {
+    var jobs = [];
+    cache.projects.forEach(function (p) {
+      var pms = String(p.pm || '').split(/\s*[,，、;；]\s*/).filter(Boolean);
+      var has = pms.indexOf(name) >= 0, want = ids.indexOf(p.id) >= 0;
+      if (has === want) return;
+      pms = want ? pms.concat(name) : pms.filter(function (x) { return x !== name; });
+      jobs.push(sb.from('projects').update({ pm: pms.join(', ') }).eq('id', p.id).select().then(function (res) {
+        var r = chk(res)[0]; if (!r) throw new Error('你沒有修改專案 PM 的權限。');
+        var i = cache.projects.findIndex(function (x) { return x.id === r.id; }); if (i >= 0) cache.projects[i] = r;
+      }));
+    });
+    return Promise.all(jobs).then(function () { return { count: jobs.length }; }).catch(function (e) { throw err(e); });
+  }
+
   function saveLeave(obj) {
     if (!obj.person) return Promise.reject(new Error('請選擇人員。'));
     if (!/^\d{4}-\d{2}-\d{2}$/.test(obj.start || '')) return Promise.reject(new Error('請填開始日。'));
@@ -660,7 +676,7 @@ var API = (function () {
   var SHEETS = {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
-      done_qty: '完成數量', qty: '數量', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
+      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
@@ -669,7 +685,7 @@ var API = (function () {
     settings: ['設定', { key: '項目', value: '值', note: '說明' }]
   };
   var DATE_COLS = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1, start: 1, target: 1, day: 1, start_date: 1, end_date: 1 };
-  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, step: 1 };
+  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, pct: 1, step: 1 };
   function cellDate(v) {
     if (v === '' || v === null || v === undefined) return null;
     if (typeof v === 'number') return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
@@ -830,7 +846,7 @@ var API = (function () {
     saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
     adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
     saveDay: saveDay, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
-    periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
+    setManagedProjects: setManagedProjects, periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
     me: function () { return me; }
   };
 })();

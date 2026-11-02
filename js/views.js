@@ -23,7 +23,7 @@ function renderMine(c) {
     ['等待前置', waiting, '#a25ddc', '沒有在等別人的工作。'],
     ['已送驗收', review, ST_HEX['待驗收'], 'PM 確認後會標成完成。']
   ];
-  var pmReview = isPM() ? d.tasks.filter(function (t) { return t.status === '待驗收' && canEdit(t); }) : [];
+  var pmReview = isPM() && self ? d.tasks.filter(isMyReview) : [];
   if (pmReview.length) lanes.unshift(['等你驗收', pmReview, ST_HEX['完成'], '']);
   var h = '<div class="mine-h"><div class="stats">' +
     '<div class="stat"><b>' + doing.length + '</b><span>進行中</span></div><div class="stat"><b>' + ready.length + '</b><span>可以開始</span></div>' +
@@ -54,6 +54,7 @@ function renderMine(c) {
     });
   });
   $$('[data-open]', c).forEach(function (b) { b.addEventListener('click', function () { openTask(b.dataset.open); }); });
+  $$('[data-pct]', c).forEach(function (b) { b.addEventListener('click', function () { popPct(b, byId[b.dataset.pct]); }); });
   var ca = $('#confirmAll');
   if (ca) ca.addEventListener('click', function () {
     if (!confirm('把 ' + pmReview.length + ' 個待驗收的工項全部標為完成？')) return;
@@ -66,10 +67,12 @@ function mineCard(t, lane) {
   var h = '<div class="tcard" style="border-left-color:' + pcolor(t.project) + '"><div class="t">' + esc(t.title) + '</div>' +
     '<div class="m"><span>' + esc(projName(t.project)) + (t.group ? '・' + esc(t.group) : '') + '</span><span>' + esc(t.days) + ' 天</span><span>預計 ' + md(t.start) + ' – ' + md(t.end) + '</span>' + (lane === '等你驗收' ? person(t.owner) : '') + '</div>';
   (t.warns || []).slice(0, 2).forEach(function (w) { h += '<div style="margin-top:6px"><span class="wtag ' + sev(w) + '">' + esc(w) + '</span></div>'; });
+  if (lane === '進行中') h += '<div style="margin-top:8px">' + progBar(t, true) + '</div>';
   if (lane === '等待前置') split(t.preds).forEach(function (p) { var x = byId[p]; if (x && x.status !== '完成' && x.status !== '待驗收') h += '<div class="wait">等 <b>' + esc(x.owner || '未指派') + '</b> 的「' + esc(x.title) + '」，預計 ' + md(x.end) + ' 完成</div>'; });
   h += '<div class="acts">';
   if (lane === '進行中' && up && qty > 1) h += '<span class="stepper"><button data-step="-1" data-id="' + esc(t.id) + '">−</button><span>' + done + ' / ' + qty + '</span><button data-step="1" data-id="' + esc(t.id) + '">＋</button></span>';
   if (lane === '可以開始' && up) h += '<button class="btn primary" data-act="進行中" data-id="' + esc(t.id) + '">開始</button>';
+  if (lane === '進行中' && up) h += '<button class="btn" data-pct="' + esc(t.id) + '">回報進度</button>';
   if (lane === '進行中' && up) h += '<button class="btn primary" data-act="待驗收" data-id="' + esc(t.id) + '">送驗收</button>';
   if (lane === '等你驗收') h += '<button class="btn primary" data-act="完成" data-id="' + esc(t.id) + '">確認完成</button><button class="btn" data-act="進行中" data-id="' + esc(t.id) + '">退回修改</button>';
   h += '<button class="btn ghost" data-open="' + esc(t.id) + '">詳細</button></div></div>';
@@ -138,7 +141,8 @@ function renderPeople(c) {
     });
     L.ts.forEach(function (t) {
       var a = x(Math.max(dn(t.start), min)), b = x(Math.min(dn(t.end), max) + 1);
-      h += '<div class="gbar ro' + (t.mode === '平行' ? ' par' : '') + (worst(t) === 'd' ? ' bad' : '') + (t.status === '完成' ? ' done' : '') + '" data-id="' + esc(t.id) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 6) + 'px;top:' + (L.top + 6 + t._lane * LH) + 'px;background-color:' + pcolor(t.project) + '" title="' + esc(projName(t.project) + '｜' + t.title + '\n' + t.status + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天') + '"><span class="lbl">' + (W >= 13 ? esc(t.title) : '') + '</span></div>';
+      var ed = canEdit(t), movable = ed && (t.status === '未開始' || t.status === '暫停'), sizable = ed && t.status !== '完成' && t.status !== '取消' && dn(t.end) <= max;
+      h += '<div class="gbar' + (movable ? '' : ' ro') + (t.mode === '平行' ? ' par' : '') + (worst(t) === 'd' ? ' bad' : '') + (t.status === '完成' ? ' done' : '') + '" data-id="' + esc(t.id) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 6) + 'px;top:' + (L.top + 6 + t._lane * LH) + 'px;background-color:' + pcolor(t.project) + '" title="' + esc(projName(t.project) + '｜' + t.title + '\n' + t.status + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天' + (t.pct != null && t.pct !== '' ? '｜完成 ' + t.pct + '%' : '') + (movable ? '\n拖曳改開始日，拉右邊緣改天數' : '')) + '"><span class="lbl">' + (W >= 13 ? esc(t.title) : '') + '</span>' + (sizable ? '<span class="rz"></span>' : '') + '</div>';
     });
   });
   h += '</div></div></div></div>';
@@ -148,7 +152,9 @@ function renderPeople(c) {
   gr.addEventListener('scroll', function () { if (gl.scrollTop !== gr.scrollTop) gl.scrollTop = gr.scrollTop; });
   gl.addEventListener('scroll', function () { if (gr.scrollTop !== gl.scrollTop) gr.scrollTop = gl.scrollTop; });
   gl.addEventListener('wheel', function (e) { gr.scrollTop += e.deltaY; e.preventDefault(); }, { passive: false });
-  $$('.gbar', c).forEach(function (el) { el.addEventListener('click', function () { openTask(el.dataset.id); }); });
+  bindGanttDrag($('.gbody', c), { W: W, onTap: function (t) { openTask(t.id); } });
+  if (S._pScroll) { gr.scrollLeft = S._pScroll.l; gr.scrollTop = S._pScroll.t; }
+  gr.addEventListener('scroll', function () { S._pScroll = { l: gr.scrollLeft, t: gr.scrollTop }; });
   $$('.pname', c).forEach(function (el) { el.addEventListener('click', function () { openQueue(el.dataset.p); }); });
 }
 function bindPeople() {
@@ -232,7 +238,8 @@ function drawerBody() {
     var stOpts = full && !mine ? STATUSES : full ? STATUSES : ['未開始', '進行中', '待驗收'].concat(['未開始', '進行中', '待驗收'].indexOf(t.status) < 0 ? [t.status] : []);
     h += '<div class="sect"><div class="sect-h">進度' + (progEdit ? '' : '<span class="faint">由 ' + esc(t.owner || '負責人') + ' 回報</span>') + '</div><div class="props">';
     h += '<label>狀態</label><div>' + sel('status', stOpts, statusEdit) + (full && !mine ? '<span class="hint">驗收時改成「完成」或退回「進行中」</span>' : '') + '</div>';
-    h += '<label>完成數量</label><div>' + inp('doneQty', 'number', progEdit, ' style="max-width:100px"') + '<span class="faint">/ ' + esc(t.qty || 1) + '</span></div>';
+    h += '<label>完成度</label><div><input class="field" name="pct" type="number" min="0" max="100" step="5" value="' + esc(t.pct) + '"' + (progEdit ? '' : ' disabled') + ' style="max-width:90px"><span class="faint">%</span>' + (t.status === '進行中' ? progBar(t) : '') + '<span class="hint">做到幾成就填幾成，系統會用剩下的量重算完成日</span></div>';
+    if ((Number(t.qty) || 1) > 1) h += '<label>完成數量</label><div>' + inp('doneQty', 'number', progEdit, ' style="max-width:100px"') + '<span class="faint">/ ' + esc(t.qty || 1) + '</span></div>';
     h += '<label>實際開始</label><div>' + inp('astart', 'date', progEdit, ' style="max-width:180px"') + (progEdit ? '<span class="hint">按「開始」會自動填今天</span>' : '') + '</div>';
     h += '<label>實際完成</label><div>' + inp('aend', 'date', progEdit, ' style="max-width:180px"') + '</div>';
     h += '<label>備註</label><div><textarea class="field" name="note" rows="2"' + (mine || full ? '' : ' disabled') + '>' + esc(t.note) + '</textarea></div>';
@@ -305,7 +312,8 @@ function formValues() {
   $$('[name]', $('#dBody')).forEach(function (el) { if (!el.disabled) o[el.name] = el.value; });
   var tt = $('#dTitle'); if (tt && !tt.readOnly) o.title = tt.value.trim();
   if (D.full) o.preds = D.preds.join(', ');
-  ['days', 'lag', 'doneQty', 'qty'].forEach(function (k) { if (k in o && o[k] !== '') o[k] = Number(o[k]); });
+  ['days', 'lag', 'doneQty', 'qty', 'pct'].forEach(function (k) { if (k in o && o[k] !== '') o[k] = Number(o[k]); });
+  if ('pct' in o && o.pct !== '') o.pct = Math.max(0, Math.min(100, o.pct));
   return o;
 }
 var previewSoon = debounce(function () {
@@ -753,6 +761,34 @@ function openYearExport(who) {
   });
 }
 
+/* 人員設定：PM／管理員的「管理專案」 */
+function mgCell(p, admin) {
+  if (p.role === '美術') return '<span class="faint">—</span>';
+  var ids = managedBy(p.name), names = ids.map(projName);
+  var txt = names.length ? esc(names.join('、')) : '<span class="faint">未指定（全部）</span>';
+  return admin ? '<button class="btn sm ghost mgbtn" title="設定管理專案">' + txt + '</button>' : txt;
+}
+function bindMg(cell, p) {
+  var b = $('.mgbtn', cell); if (!b) return;
+  b.addEventListener('click', function () {
+    var cur = managedBy(p.name);
+    var ps = S.data.projects.slice().sort(function (a, b2) { return (a.status === '封存') - (b2.status === '封存') || a.name.localeCompare(b2.name, 'zh-Hant'); });
+    var pop = openPop(b, '<div class="lab">' + esc(p.name) + ' 管理的專案（可複選）</div>' + ps.map(function (x) {
+      var others = pmList(x).filter(function (n) { return n !== p.name; });
+      return '<label class="opt"><input type="checkbox" value="' + esc(x.id) + '"' + (cur.indexOf(x.id) >= 0 ? ' checked' : '') + '><span style="flex:1">' + esc(x.name) + (x.status === '封存' ? ' <span class="faint">封存</span>' : '') + '</span>' + (others.length ? '<span class="faint" style="font-size:12px">' + esc(others.join('、')) + '</span>' : '') + '</label>';
+    }).join('') + '<div class="hint" style="padding:4px 8px">勾選後，他只會收到這些專案的驗收；有指定 PM 的專案，也只有列出的 PM 能修改。都不勾＝照角色權限看全部。</div><div style="display:flex;gap:6px;padding:4px"><button class="btn sm primary" id="mgOk">儲存</button><button class="btn sm" id="mgNo">取消</button></div>', 300);
+    $('#mgNo', pop).addEventListener('click', closePop);
+    $('#mgOk', pop).addEventListener('click', function () {
+      var ids = $$('input[type=checkbox]:checked', pop).map(function (x) { return x.value; });
+      closePop(); busy(true);
+      call('setManagedProjects', p.name, ids).then(function (r) {
+        busy(false); adminRefresh(); cell.innerHTML = mgCell(p, true); bindMg(cell, p);
+        toast(r.count ? '已更新 ' + p.name + ' 的管理專案' : '沒有變更');
+      }).catch(fail);
+    });
+  });
+}
+
 function roleSel(id, v, dis) { return '<select class="field"' + (id ? ' id="' + id + '"' : '') + (dis || '') + '>' + ['美術', 'PM', '管理員'].map(function (r) { return '<option' + (r === v ? ' selected' : '') + '>' + r + '</option>'; }).join('') + '</select>'; }
 function setPeople(box) {
   var d = API.adminData(), admin = isAdmin(), q = (S.peopleQ || '').toLowerCase(), showOff = !!S.peopleOff;
@@ -760,11 +796,11 @@ function setPeople(box) {
   var noEmail = d.people.filter(function (p) { return p.active && !p.email; }).length;
   var h = ro() + '<div class="toolbar" style="padding:0 0 12px"><span class="search">' + IC.search + '<input type="search" class="field" id="ppQ" placeholder="搜尋姓名、Email" value="' + esc(S.peopleQ || '') + '"></span><label class="chk"><input type="checkbox" id="ppOff"' + (showOff ? ' checked' : '') + '>顯示已離職</label><span class="grow"></span>' +
     (noEmail ? '<span class="wtag w">' + noEmail + ' 位在職人員還沒填 Email，還不能登入</span>' : '') + (admin ? '<button class="btn" id="ppBulk">批次貼上 Email</button>' : '') + '</div>';
-  h += '<div class="tablewrap" style="max-height:calc(100vh - 250px)"><table class="grid2" style="min-width:880px"><thead><tr><th>姓名</th><th>Email（公司 Google 帳號）</th><th style="width:110px">角色</th><th>別名</th><th style="width:50px">在職</th><th>備註</th><th style="width:56px">工項</th><th style="width:130px"></th></tr></thead><tbody>';
-  if (admin) h += '<tr style="background:var(--accent-soft)"><td><input class="field" id="npName" placeholder="新人員姓名"></td><td><input class="field" id="npEmail" placeholder="name@公司網域"></td><td>' + roleSel('npRole', '美術') + '</td><td><input class="field" id="npAlias"></td><td></td><td><input class="field" id="npNote"></td><td></td><td><button class="btn sm primary" id="npAdd">新增</button></td></tr>';
+  h += '<div class="tablewrap" style="max-height:calc(100vh - 250px)"><table class="grid2" style="min-width:1000px"><thead><tr><th>姓名</th><th>Email（公司 Google 帳號）</th><th style="width:110px">角色</th><th style="width:170px">管理專案</th><th>別名</th><th style="width:50px">在職</th><th>備註</th><th style="width:56px">工項</th><th style="width:130px"></th></tr></thead><tbody>';
+  if (admin) h += '<tr style="background:var(--accent-soft)"><td><input class="field" id="npName" placeholder="新人員姓名"></td><td><input class="field" id="npEmail" placeholder="name@公司網域"></td><td>' + roleSel('npRole', '美術') + '</td><td></td><td><input class="field" id="npAlias"></td><td></td><td><input class="field" id="npNote"></td><td></td><td><button class="btn sm primary" id="npAdd">新增</button></td></tr>';
   list.forEach(function (p, i) {
     var dis = admin ? '' : ' disabled';
-    h += '<tr data-pi="' + i + '"' + (p.active ? '' : ' style="opacity:.6"') + '><td><span class="person">' + avatar(p.name, true) + '<b>' + esc(p.name) + '</b></span></td><td><input class="field" data-f="email" value="' + esc(p.email) + '"' + dis + '></td><td>' + roleSel('', p.role, dis) + '</td>' +
+    h += '<tr data-pi="' + i + '"' + (p.active ? '' : ' style="opacity:.6"') + '><td><span class="person">' + avatar(p.name, true) + '<b>' + esc(p.name) + '</b></span></td><td><input class="field" data-f="email" value="' + esc(p.email) + '"' + dis + '></td><td>' + roleSel('', p.role, dis) + '</td><td data-mg>' + mgCell(p, admin) + '</td>' +
       '<td><input class="field" data-f="alias" value="' + esc(p.alias) + '"' + dis + '></td><td style="text-align:center"><input type="checkbox" data-f="active"' + (p.active ? ' checked' : '') + dis + '></td>' +
       '<td><input class="field" data-f="note" value="' + esc(p.note) + '"' + dis + '></td><td style="text-align:right">' + (d.usage[p.name] || 0) + '</td>' +
       '<td style="white-space:nowrap">' + (admin ? '<span class="psv" data-pst></span> ' + (d.usage[p.name] ? '' : '<button class="btn sm danger" data-pdel="' + i + '">刪除</button>') : '') + '</td></tr>';
@@ -797,6 +833,7 @@ function setPeople(box) {
         return call('savePerson', p.name, o).then(function (np) {
           cur = { email: np.email || '', role: np.role, alias: np.alias || '', active: !!np.active, note: np.note || '' };
           adminRefresh(); show('ok', '✓ 已儲存');
+          var mc = $('[data-mg]', tr); if (mc) { mc.innerHTML = mgCell(np, true); bindMg(mc, np); }
         }).catch(function (e) { put(cur); show('err', '未儲存'); toast((e && e.message) || String(e), true); });
       });
     }
@@ -808,6 +845,7 @@ function setPeople(box) {
       });
     });
   });
+  $$('tr[data-pi]', box).forEach(function (tr) { var mc = $('[data-mg]', tr); if (mc) bindMg(mc, list[+tr.dataset.pi]); });
   $$('[data-pdel]', box).forEach(function (b) {
     b.addEventListener('click', function () {
       var p = list[+b.dataset.pdel]; if (!confirm('刪除人員「' + p.name + '」？')) return;
@@ -1047,8 +1085,8 @@ API.init().then(function (r) {
 var HELP = {
   '美術': [
     ['登入', ['用<b>公司 Google 帳號</b>登入。看到「沒有使用權限」時，請管理員在人員名單填上你的 Email。', '手機也能用，介面會自動調整。左下角的半圓圖示可以切換淺色、深色主題。']],
-    ['每天要做的事：在「我的工作」回報進度', ['左側點「<b>我的工作</b>」，你的工作會分成：<b>進行中</b>、<b>可以開始</b>（前置都完成了）、<b>等待前置</b>（還在等別人）、<b>已送驗收</b>。', '開始做某項工作 → 按卡片上的「<b>開始</b>」。系統會自動記下實際開始日。', '做完 → 按「<b>送驗收</b>」。系統會記下實際完成日，PM 確認後會變成「完成」；如果被退回，會回到「進行中」。', '一次只開始你真的在做的工作，排程才會準。']],
-    ['需要補充或修正時', ['點卡片上的「<b>詳細</b>」打開工項面板，在「進度」區可以改：狀態、完成數量、實際開始、實際完成、備註。', '<b>有數量的工項</b>（例如 10 張立繪）：做了幾張就填「完成數量」，系統會用剩下的量重新推算完成日。', '忘了按開始或日期記錯，直接改實際日期，順便在備註寫原因。', '工項名稱、天數、負責人、前置這些由 PM 安排，你這邊會是唯讀；有問題請找 PM。']],
+    ['每天要做的事：在「我的工作」回報進度', ['左側點「<b>我的工作</b>」，你的工作會分成：<b>進行中</b>、<b>可以開始</b>（前置都完成了）、<b>等待前置</b>（還在等別人）、<b>已送驗收</b>。', '開始做某項工作 → 按卡片上的「<b>開始</b>」。系統會自動記下實際開始日。', '做的過程中按「<b>回報進度</b>」填完成度（例如 30%），主管在首頁就看得到誰落後；系統也會用剩下的量重算完成日。', '做完 → 按「<b>送驗收</b>」。系統會記下實際完成日，PM 確認後會變成「完成」；如果被退回，會回到「進行中」。', '一次只開始你真的在做的工作，排程才會準。']],
+    ['需要補充或修正時', ['點卡片上的「<b>詳細</b>」打開工項面板，在「進度」區可以改：狀態、完成數量、實際開始、實際完成、備註。', '<b>完成度</b>：做到幾成就填幾成。進度條上的直線是「照計畫今天應該到哪裡」，綠條在直線左邊很多就代表落後。', '忘了按開始或日期記錯，直接改實際日期，順便在備註寫原因。', '工項名稱、天數、負責人、前置這些由 PM 安排，你這邊會是唯讀；有問題請找 PM。', '所有下拉選單都可以直接打字篩選。']],
     ['預計日期是怎麼來的？', ['你<b>不用</b>自己填預計日期。系統會依天數、你的排隊順序、前置工項、假日和休假自動計算，任何人改了東西都會即時重算。', '別人的修改會即時出現在你的畫面上，不用重新整理。']],
     ['工項上的警示', ['<span class="wtag d">超過出版日</span>：照目前進度會趕不上期限。', '<span class="wtag w">進度落後</span>：已經過了預計完成日還沒送驗收。', '<span class="wtag w">比基準晚</span>：比 PM 一開始規劃的完成日晚。', '看到警示不用緊張，PM 也看得到，必要時會調整排程。']],
     ['查看全部排程', ['「<b>人員排程</b>」：用時間軸看每個人接下來的工作和休假。', '左側「<b>專案</b>」：看整個專案的工項表格和甘特圖。上方的年度選單可以切換考核年度。']],
@@ -1058,13 +1096,13 @@ var HELP = {
     ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。']],
     ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、負責、天數；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。']],
     ['在表格上編輯', ['直接點負責、狀態、天數、前置、出版日的格子就能改，存檔是自動的。', '勾選多筆後，下方會出現批次列：改狀態、指派給、刪除。', '上方可以篩選負責人、群組、狀態、「只看有警示」，也可以切換考核年度。']],
-    ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '同一個人的工作順序：「人員排程」點人名，用上下箭頭調整排隊順序。']],
-    ['驗收', ['美術送驗收後，你的「我的工作」最上面會出現「<b>等你驗收</b>」，側欄也會顯示數字。', '確認沒問題按「確認完成」；需要修改按「退回修改」，工項會回到進行中。']],
+    ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '「<b>人員排程</b>」的時間軸也可以直接拖曳：拖整條改開始日、拉右邊緣改天數，方便一次看所有人的負載再調整。', '同一個人的工作順序：「人員排程」點人名，用上下箭頭調整排隊順序。']],
+    ['驗收', ['美術送驗收後，你的「我的工作」最上面會出現「<b>等你驗收</b>」，側欄也會顯示數字。', '確認沒問題按「確認完成」；需要修改按「退回修改」，工項會回到進行中，完成度重新回報。', '管理員可以在「設定 → 人員」幫你設定<b>管理專案</b>，設定後只會收到那些專案的驗收。']],
     ['休假與人力', ['「人員排程」右上「<b>登記休假</b>」，休假期間不會排工作，後面的工作會自動往後推。', '「下載個人排程表」可以一次下載所有人的排程 Excel，也能快速選考核年度。']],
-    ['每天花一分鐘看首頁', ['首頁會列出各專案進度、所有警示，以及七天內預計完成的工項。']]
+    ['每天花一分鐘看首頁', ['首頁會列出各專案進度、所有警示，以及七天內預計完成的工項。', '每一項都有完成度進度條：直線是照計畫應有的進度，條變紅代表比應有進度少 15% 以上。「未回報」可以提醒負責人更新。']]
   ],
   '管理員': [
-    ['人員', ['「設定 → 人員」：修改後離開欄位就自動儲存。', '<b>批次貼上 Email</b>：從公司通訊錄或 Excel 複製「姓名、Email」兩欄貼上，全名會自動對應到名單上的名字。也可以加第三欄角色。', '角色：<b>美術</b>只能更新自己的工項；<b>PM</b>可以排程；<b>管理員</b>全部權限。專案設定裡可以指定某專案只有哪幾位 PM 能改。', '離職的人取消勾選「在職」，歷史工項會保留。']],
+    ['人員', ['「設定 → 人員」：修改後離開欄位就自動儲存。', '<b>批次貼上 Email</b>：從公司通訊錄或 Excel 複製「姓名、Email」兩欄貼上，全名會自動對應到名單上的名字。也可以加第三欄角色。', '角色：<b>美術</b>只能更新自己的工項；<b>PM</b>可以排程；<b>管理員</b>全部權限。專案設定裡可以指定某專案只有哪幾位 PM 能改。', '<b>管理專案</b>：PM、管理員那一列可以勾選管理哪些專案（可複選）。設定後他只會收到這些專案的驗收；有指定 PM 的專案，也只有列出的 PM 能修改。', '離職的人取消勾選「在職」，歷史工項會保留。']],
     ['一般設定', ['管理員 Email 名單、美術可以看到哪些工項（全部、自己有工項的專案、只有自己的）。']],
     ['行事曆與範本', ['「行事曆」：國定假日、公司活動、補班日。每年年底記得加入隔年的假日。', '「範本」：維護常用流程與相依。']],
     ['考核年度與封存', ['「年度封存」：設定考核年度從幾月開始。改月份時，下一個年度會接著上次封存的結束日。', '每年考核結束後，由舊到新封存上一年度；資料不會刪除，可以隨時解除封存。']],

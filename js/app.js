@@ -20,7 +20,7 @@ function toast(msg, err) {
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
-var WRITE_FNS = { saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
+var WRITE_FNS = { setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
   archivePeriod: 1, unarchivePeriod: 1, saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
 var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
@@ -81,7 +81,7 @@ function index() {
 function applyComputed(m) {
   Object.keys(m || {}).forEach(function (id) {
     var t = byId[id]; if (!t) return; var c = m[id];
-    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6];
+    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7];
   });
 }
 function upsert(t) { if (byId[t.id]) Object.assign(byId[t.id], t); else { S.data.tasks.push(t); byId[t.id] = t; } index(); }
@@ -91,6 +91,48 @@ function removeTask(id) { S.data.tasks = S.data.tasks.filter(function (t) { retu
 function isPM() { return S.data.me.role !== '美術'; }
 function isAdmin() { return S.data.me.role === '管理員'; }
 function canEdit(t) { var p = projById[t.project]; return !!(p && p.canEdit); }
+/* 完成度：有填百分比用百分比；否則用數量；完成／待驗收算 100% */
+function progOf(t) {
+  if (t.status === '完成' || t.status === '待驗收') return 100;
+  if (t.pct !== '' && t.pct !== null && t.pct !== undefined) return Math.max(0, Math.min(100, Number(t.pct)));
+  var q = Number(t.qty) || 1;
+  if (q > 1 && Number(t.doneQty)) return Math.round(Number(t.doneQty) / q * 100);
+  return t.status === '未開始' ? 0 : null;
+}
+/* 進度條：實際完成度＋應有進度的刻度；落後 15% 以上變紅 */
+function progBar(t, wide) {
+  var p = progOf(t), ex = t.status === '進行中' && t.expect !== undefined && t.expect !== null ? t.expect : null;
+  var behind = p !== null && ex !== null && ex - p >= 15;
+  var tip = (p === null ? '還沒回報完成度' : '完成 ' + p + '%') + (ex !== null ? '，照計畫應有 ' + ex + '%' : '');
+  return '<span class="prog' + (wide ? ' wide' : '') + (behind ? ' behind' : '') + '" title="' + tip + '"><span class="pbar"><i style="width:' + (p || 0) + '%"></i>' + (ex !== null ? '<b style="left:' + ex + '%"></b>' : '') + '</span><span class="pnum">' + (p === null ? '未回報' : p + '%') + '</span></span>';
+}
+/* 回報完成度的小視窗 */
+function popPct(anchor, t, done) {
+  var cur = progOf(t) || 0;
+  var p = openPop(anchor, '<div class="lab">「' + esc(t.title) + '」完成度</div><div style="display:flex;gap:8px;align-items:center;padding:4px 6px"><input type="range" min="0" max="100" step="5" id="pctR" value="' + cur + '" style="flex:1"><input class="field" type="number" min="0" max="100" step="5" id="pctN" value="' + cur + '" style="width:64px;margin:0">%</div>' +
+    '<div style="display:flex;gap:4px;padding:2px 6px">' + [25, 50, 75, 90].map(function (v) { return '<button class="btn sm" data-pv="' + v + '">' + v + '%</button>'; }).join('') + '</div><div style="display:flex;gap:6px;padding:6px"><button class="btn sm primary" id="pctOk">儲存</button><span class="hint">做完請按「送驗收」</span></div>', 290);
+  var r = $('#pctR', p), n = $('#pctN', p);
+  r.addEventListener('input', function () { n.value = r.value; });
+  n.addEventListener('input', function () { r.value = n.value; });
+  $$('[data-pv]', p).forEach(function (b) { b.addEventListener('click', function () { r.value = n.value = b.dataset.pv; }); });
+  var save = function () {
+    var v = Math.max(0, Math.min(100, Math.round(Number(n.value) || 0)));
+    closePop();
+    if (v !== Number(t.pct)) patchTask(t.id, { pct: v }, '已更新完成度 ' + v + '%');
+    if (done) done(v);
+  };
+  $('#pctOk', p).addEventListener('click', save);
+  n.addEventListener('keydown', function (e) { if (e.key === 'Enter') save(); });
+  n.focus(); n.select();
+}
+function pmList(p) { return String((p && p.pm) || '').split(/\s*[,，、;；]\s*/).filter(Boolean); }
+function managedBy(name) { return S.data.projects.filter(function (p) { return pmList(p).indexOf(name) >= 0; }).map(function (p) { return p.id; }); }
+/* 等你驗收：有設定管理專案的人只收到那些專案；沒設定的照權限收到全部 */
+function isMyReview(t) {
+  if (t.status !== '待驗收' || !canEdit(t)) return false;
+  var mine = managedBy(S.data.me.name);
+  return !mine.length || mine.indexOf(t.project) >= 0;
+}
 function canUpdate(t) { return canEdit(t) || t.owner === S.data.me.name; }
 function statusChoices(t) { return canEdit(t) ? STATUSES : ['未開始', '進行中', '待驗收']; }
 function projName(id) { return (projById[id] || {}).name || id; }
@@ -242,7 +284,7 @@ function renderShell() {
 function renderNav() {
   var d = S.data, r = S.route;
   var mineCount = d.tasks.filter(function (t) { return t.owner === d.me.name && (t.status === '進行中' || t.status === '未開始'); }).length;
-  var review = isPM() ? d.tasks.filter(function (t) { return t.status === '待驗收' && canEdit(t); }).length : 0;
+  var review = isPM() ? d.tasks.filter(isMyReview).length : 0;
   var h = '<a href="#/" class="' + (r.view === 'home' ? 'on' : '') + '"><span class="ic">' + IC.home + '</span>首頁</a>';
   h += '<a href="#/mine" class="' + (r.view === 'mine' ? 'on' : '') + '"><span class="ic">' + IC.mine + '</span>我的工作' + (review ? '<span class="badge" title="等你驗收">' + review + '</span>' : (mineCount ? '<span class="badge" style="background:var(--line);color:var(--ink2)">' + mineCount + '</span>' : '')) + '</a>';
   h += '<a href="#/people" class="' + (r.view === 'people' ? 'on' : '') + '"><span class="ic">' + IC.people + '</span>人員排程</a>';
@@ -301,13 +343,15 @@ function renderHome(c) {
   var issues = d.tasks.filter(function (t) { return (t.warns || []).length && t.status !== '完成' && t.status !== '取消' && projById[t.project] && projById[t.project].status !== '封存'; });
   var order = function (t) { var w = t.warns.join(' '); return /循環/.test(w) ? 0 : /超過出版日/.test(w) ? 1 : /進度落後/.test(w) ? 2 : /排序衝突/.test(w) ? 3 : 4; };
   issues.sort(function (a, b) { return order(a) - order(b) || (a.end || '').localeCompare(b.end || ''); });
+  h += '<div class="home2"><section>';
   h += '<div class="sec-h"><h3>需要注意</h3><span class="faint">' + issues.length + ' 項</span></div>';
   h += issues.length ? '<div class="list">' + issues.slice(0, 50).map(listItem).join('') + '</div>' + (issues.length > 50 ? '<div class="hint" style="margin-top:6px">只列出前 50 項，其餘請到各專案的主表格勾選「只看有警示」。</div>' : '')
     : '<div class="list empty"><b>目前沒有警示</b>所有工項都在出版日前、照基準進行。</div>';
   var today = dn(d.today), wkEnd = today + 7;
   var due = d.tasks.filter(function (t) { return t.status !== '完成' && t.status !== '取消' && t.end && dn(t.end) >= today && dn(t.end) <= wkEnd; }).sort(sortTasks);
-  h += '<div class="sec-h"><h3>七天內預計完成</h3><span class="faint">' + due.length + ' 項</span></div>';
+  h += '</section><section><div class="sec-h"><h3>七天內預計完成</h3><span class="faint">' + due.length + ' 項</span></div>';
   h += due.length ? '<div class="list">' + due.slice(0, 40).map(listItem).join('') + '</div>' : '<div class="list empty">七天內沒有預計完成的工項。</div>';
+  h += '</section></div>';
   c.innerHTML = h;
   $$('.pcard', c).forEach(function (el) { el.addEventListener('click', function () { go('p/' + encodeURIComponent(el.dataset.p)); }); });
   $$('.li', c).forEach(function (el) { el.addEventListener('click', function () { openTask(el.dataset.id); }); });
@@ -316,8 +360,9 @@ function greet() { var h = new Date(Date.now() + 8 * 3600000).getUTCHours(); ret
 function listItem(t) {
   return '<div class="li" data-id="' + esc(t.id) + '"><span class="dot" style="width:10px;height:10px;border-radius:3px;background:' + pcolor(t.project) + '"></span>' +
     '<div class="t"><b>' + esc(t.title) + '</b><span>' + esc(projName(t.project)) + (t.group ? '・' + esc(t.group) : '') + '</span></div>' +
-    '<div>' + person(t.owner) + '</div><div class="hide-m">' + pill(t.status) + '</div><div class="hide-m faint">預計 ' + md(t.end) + '</div>' +
-    '<div class="hide-m">' + (t.warns || []).slice(0, 2).map(function (w) { return '<span class="wtag ' + sev(w) + '">' + esc(w) + '</span>'; }).join('') + '</div></div>';
+    '<div class="who">' + person(t.owner) + '</div>' +
+    '<div class="meta">' + pill(t.status) + '<span class="faint">預計 ' + md(t.end) + '</span>' + progBar(t) +
+    (t.warns || []).slice(0, 2).map(function (w) { return '<span class="wtag ' + sev(w) + '">' + esc(w) + '</span>'; }).join('') + '</div></div>';
 }
 
 /* ---------------- 專案共用：標題、檢視切換、篩選 ---------------- */
@@ -475,8 +520,8 @@ function rowHtml(t, color, tmin, tmax) {
   var tl = '';
   if (t.start) {
     var a = dn(t.start), b = dn(t.end), today = dn(S.data.today);
-    var pct = t.status === '完成' ? 100 : Math.max(0, Math.min(100, (today - a + 1) / (b - a + 1) * 100));
-    tl = '<div class="tl' + (over ? ' bad' : '') + '" title="' + esc(t.start + ' ~ ' + t.end) + '"><i style="width:' + pct + '%;background:' + color + ';opacity:.85"></i><span' + (pct > 55 ? ' style="color:#fff"' : '') + '>' + md(t.start) + ' – ' + md(t.end) + '</span></div>';
+    var pg = progOf(t), pct = t.status === '完成' ? 100 : (t.status === '進行中' && pg !== null) ? pg : Math.max(0, Math.min(100, (today - a + 1) / (b - a + 1) * 100));
+    tl = '<div class="tl' + (over ? ' bad' : '') + '" title="' + esc(t.start + ' ~ ' + t.end + (t.status === '進行中' && pg !== null ? '｜完成 ' + pg + '%' + (t.expect != null ? '（應有 ' + t.expect + '%）' : '') : '')) + '"><i style="width:' + pct + '%;background:' + color + ';opacity:.85"></i><span' + (pct > 55 ? ' style="color:#fff"' : '') + '>' + md(t.start) + ' – ' + md(t.end) + '</span></div>';
   }
   return '<tr class="row' + (S.picked[t.id] ? ' sel' : '') + '" data-id="' + esc(t.id) + '"><td class="edge" style="background:' + color + '"></td>' +
     '<td class="ck"><input type="checkbox" data-pick="' + esc(t.id) + '"' + (S.picked[t.id] ? ' checked' : '') + '></td>' +
@@ -524,7 +569,7 @@ function bindBoard(c, p) {
 
 /* ---------------- 格內編輯 ---------------- */
 var POP = null;
-function closePop() { if (POP) { POP.remove(); POP = null; } }
+function closePop() { if (POP) { POP.remove(); POP = null; } SEL_POP = null; }
 document.addEventListener('mousedown', function (e) { if (POP && !POP.contains(e.target)) closePop(); });
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { if (POP) closePop(); else if ($('.modal')) closeModal(); else closeDrawer(); } });
 function openPop(anchor, html, width) {
@@ -537,6 +582,55 @@ function openPop(anchor, html, width) {
   if (y + ph > window.innerHeight - 8) y = Math.max(8, r.top - ph - 4);
   p.style.left = Math.max(8, x) + 'px'; p.style.top = y + 'px';
   return p;
+}
+/* 可搜尋的下拉選單：電腦上點開任何 <select>，都改成可以打字篩選的選單（手機維持原生選單） */
+var SEL_POP = null;
+document.addEventListener('mousedown', function (e) {
+  var sel = e.target && e.target.closest ? e.target.closest('select') : null;
+  if (!sel || sel.multiple || sel.disabled || sel.hasAttribute('data-native')) return;
+  if (!(window.matchMedia && matchMedia('(pointer: fine)').matches)) return;
+  e.preventDefault(); e.stopPropagation();
+  if (POP && SEL_POP === sel) { closePop(); return; }
+  sel.focus(); openSelectPop(sel);
+}, true);
+function openSelectPop(sel) {
+  var items = [].map.call(sel.options, function (o, i) { return { i: i, v: o.value, t: o.textContent, dis: o.disabled, grp: o.parentNode.tagName === 'OPTGROUP' ? o.parentNode.label : '' }; });
+  var many = items.length > 6;
+  var p = openPop(sel, (many ? '<input class="field" placeholder="輸入關鍵字篩選" id="spQ" autocomplete="off">' : '') + '<div id="spL"></div>', Math.max(sel.offsetWidth, 200));
+  SEL_POP = sel;
+  var hi = 0, shown = [];
+  function draw() {
+    var q = many ? $('#spQ', p).value.trim().toLowerCase() : '';
+    shown = items.filter(function (x) { return !q || (x.t + ' ' + x.grp).toLowerCase().indexOf(q) >= 0; });
+    if (hi >= shown.length) hi = Math.max(0, shown.length - 1);
+    var lastG = null;
+    $('#spL', p).innerHTML = shown.map(function (x, k) {
+      var g = x.grp && x.grp !== lastG ? '<div class="lab">' + esc(x.grp) + '</div>' : ''; lastG = x.grp;
+      return g + '<div class="opt' + (x.i === sel.selectedIndex ? ' on' : '') + (k === hi ? ' hi' : '') + '" data-k="' + k + '"' + (x.dis ? ' style="opacity:.4;pointer-events:none"' : '') + '>' + (esc(x.t) || '&nbsp;') + '</div>';
+    }).join('') || '<div class="lab">找不到符合的選項</div>';
+    var h = $('.opt.hi', p); if (h && h.scrollIntoView) h.scrollIntoView({ block: 'nearest' });
+  }
+  function pick(x) {
+    closePop(); SEL_POP = null;
+    if (!x || x.dis) return;
+    if (sel.selectedIndex !== x.i) {
+      sel.selectedIndex = x.i;
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    sel.focus();
+  }
+  hi = Math.max(0, items.findIndex(function (x) { return x.i === sel.selectedIndex; }));
+  draw();
+  $('#spL', p).addEventListener('mousedown', function (e) { var o = e.target.closest('.opt'); if (o) { e.preventDefault(); pick(shown[+o.dataset.k]); } });
+  var key = function (e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); hi = Math.min(shown.length - 1, hi + 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); hi = Math.max(0, hi - 1); draw(); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(shown[hi]); }
+    else if (e.key === 'Tab') { closePop(); SEL_POP = null; }
+  };
+  if (many) { var q = $('#spQ', p); q.addEventListener('input', function () { hi = 0; draw(); }); q.addEventListener('keydown', key); q.focus(); }
+  else { p.tabIndex = -1; p.addEventListener('keydown', key); p.focus(); }
 }
 function editCell(td, t, field) {
   if (field === 'status') return popStatus(td, t, function (st) { patchTask(t.id, { status: st }); });

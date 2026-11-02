@@ -130,13 +130,15 @@ function highlight() {
 
 /* ---- 拖曳 ---- */
 function workdaysInclusive(a, b) { var n = 0; for (var d = a; d <= b; d++) if (!isOff(d)) n++; return n; }
-function bindGanttDrag(body) {
-  var st = null, tip = null;
+/* opt（人員排程用）：{ W: 每天寬度, onTap: 點一下工項時 } */
+function bindGanttDrag(body, opt) {
+  opt = opt || {};
+  var st = null, tip = null, GW = function () { return opt.W || G.W; };
   var showTip = function (e, text) { if (!tip) { tip = document.createElement('div'); tip.className = 'gtip'; document.body.appendChild(tip); } tip.textContent = text; tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; };
   var hideTip = function () { if (tip) { tip.remove(); tip = null; } };
   body.addEventListener('pointerdown', function (e) {
     var bar = e.target.closest('.gbar');
-    if (!bar) { if (S.sel) { S.sel = null; highlight(); } return; }
+    if (!bar) { if (!opt.onTap && S.sel) { S.sel = null; highlight(); } return; }
     var t = byId[bar.dataset.id];
     var mode = e.target.classList.contains('lk') ? 'link' : e.target.classList.contains('rz') ? 'resize' : 'move';
     st = { bar: bar, t: t, mode: mode, x0: e.clientX, y0: e.clientY, left: parseFloat(bar.style.left), width: parseFloat(bar.style.width), moved: false, delta: 0 };
@@ -160,16 +162,17 @@ function bindGanttDrag(body) {
       return;
     }
     if (st.bar.classList.contains('ro') && st.mode === 'move') { showTip(e, canEdit(st.t) ? '已開始或完成的工項不能拖曳，請改實際日期' : '你沒有修改這個專案的權限'); return; }
-    var dd = Math.round(dx / G.W);
+    var dd = Math.round(dx / GW());
     st.delta = dd;
     st.bar.classList.add('drag');
     if (st.mode === 'move') {
-      st.bar.style.left = (st.left + dd * G.W) + 'px';
+      st.bar.style.left = (st.left + dd * GW()) + 'px';
       showTip(e, dd ? '開始日 ' + md(ds(dn(st.t.start) + dd)) + '（' + (dd > 0 ? '+' : '') + dd + ' 天）' : '拖到新的開始日');
     } else {
       var newEnd = Math.max(dn(st.t.start), dn(st.t.end) + dd);
-      st.bar.style.width = Math.max(8, (newEnd - dn(st.t.start) + 1) * G.W - 2) + 'px';
-      showTip(e, '完成日 ' + md(ds(newEnd)) + '，約 ' + workdaysInclusive(dn(st.t.start), newEnd) + ' 個工作天');
+      st.bar.style.width = Math.max(8, st.width + dd * GW()) + 'px';
+      var oe = dn(st.t.end), nd = Math.max(0.5, Number(st.t.days) + (newEnd > oe ? workdaysInclusive(oe + 1, newEnd) : -workdaysInclusive(newEnd + 1, oe)));
+      showTip(e, '完成日 ' + md(ds(newEnd)) + '，天數 ' + st.t.days + ' → ' + nd + ' 天');
     }
   });
   var end = function (e) {
@@ -178,7 +181,7 @@ function bindGanttDrag(body) {
     s0.bar.classList.remove('drag');
     var tmp = $('#gTmp'); if (tmp) tmp.remove();
     $$('.gbar.linktarget').forEach(function (x) { x.classList.remove('linktarget'); });
-    if (!s0.moved) { if (e.type === 'pointerup') { S.sel = S.sel === s0.t.id ? null : s0.t.id; highlight(); } return; }
+    if (!s0.moved) { if (e.type === 'pointerup') { if (opt.onTap) opt.onTap(s0.t); else { S.sel = S.sel === s0.t.id ? null : s0.t.id; highlight(); } } return; }
     var t = s0.t;
     if (s0.mode === 'link') {
       var over = document.elementsFromPoint(e.clientX, e.clientY).filter(function (el) { return el.classList && el.classList.contains('gbar') && el !== s0.bar; })[0];
@@ -202,13 +205,15 @@ function bindGanttDrag(body) {
         return now && now.start > want ? '已設定最早 ' + md(want) + ' 開始；實際排在 ' + md(now.start) + '（前置還沒完成，或負責人前面還有工作）' : '已改到 ' + md(want) + ' 開始，後面的工項已重算';
       });
     } else {
-      var newEnd = Math.max(dn(t.start), dn(t.end) + s0.delta);
-      var days = Math.max(0.5, workdaysInclusive(dn(t.start), newEnd));
+      var oldEnd = dn(t.end), newEnd = Math.max(dn(t.start), oldEnd + s0.delta);
+      // 只加減拉動的那幾個工作天，避免把休假、跨日的空檔算進天數
+      var days = Number(t.days) + (newEnd > oldEnd ? workdaysInclusive(oldEnd + 1, newEnd) : -workdaysInclusive(newEnd + 1, oldEnd));
+      days = Math.max(0.5, days);
       if (days === Number(t.days)) { render(); return; }
       patchTask(t.id, { days: days }, '天數改為 ' + days + ' 天，後面的工項已重算');
     }
   };
   body.addEventListener('pointerup', end);
   body.addEventListener('pointercancel', end);
-  body.addEventListener('dblclick', function (e) { var bar = e.target.closest('.gbar'); if (bar) openTask(bar.dataset.id); });
+  if (!opt.onTap) body.addEventListener('dblclick', function (e) { var bar = e.target.closest('.gbar'); if (bar) openTask(bar.dataset.id); });
 }

@@ -97,7 +97,7 @@ var Engine = (function () {
 
   /**
    * input = { tasks, holidays:{日期:名稱}, makeup:{日期:1}, leaves:[{person,start,end,days}], today:'yyyy-mm-dd' }
-   * task  = { id, owner, mode, prio, days, preds, lag, earliest, release, status, doneQty, qty, astart, aend, baseline }
+   * task  = { id, owner, mode, prio, days, preds, lag, earliest, release, status, doneQty, qty, pct（完成度 0～100，可空白）, astart, aend, baseline }
    */
   function schedule(input) {
     var cal = new Calendar(input.holidays, input.makeup, input.leaves);
@@ -156,14 +156,25 @@ var Engine = (function () {
         if (a === null) a = today;
         var plan = cal.advance(who, a, dur);
         var qty = num(t.qty, 1) || 1, done = Math.min(num(t.doneQty, 0), qty);
-        var remain = dur * (1 - done / qty);
-        var res = plan;
-        if (plan.last < today && remain > EPS) {
+        var pct = num(t.pct, null), hasPct = pct !== null;
+        var remain = hasPct ? dur * (1 - Math.max(0, Math.min(100, pct)) / 100) : dur * (1 - done / qty);
+        var res = plan, before = plan.alloc.filter(function (x) { return x[0] < today; });
+        // 應有進度：照原計畫，到昨天為止應該完成的比例
+        var expect = dur > EPS ? Math.min(100, before.reduce(function (s, x) { return s + x[1]; }, 0) / dur * 100) : 0;
+        if (hasPct && a <= today) {
+          // 有填完成度：用剩下的量從今天往後推算完成日
+          var fc = remain > EPS ? cal.advance(who, today, remain) : null;
+          var lastDay = fc ? fc.last : Math.max(today, before.length ? before[before.length - 1][0] : today);
+          if (fc) res = { start: plan.start, first: plan.first, end: fc.end, last: fc.last, alloc: before.concat(fc.alloc) };
+          else res = { start: plan.start, first: plan.first, end: lastDay + 1, last: lastDay, alloc: before.length ? before : [[today, 0]] };
+          if (lastDay > plan.last) R[t.id].warn.push('進度落後：原訂 ' + ds(plan.last) + ' 完成，照目前進度約 ' + ds(lastDay));
+        } else if (plan.last < today && remain > EPS) {
           var late = cal.advance(who, today, remain);
-          res = { start: plan.start, first: plan.first, end: late.end, last: late.last, alloc: plan.alloc.filter(function (x) { return x[0] < today; }).concat(late.alloc) };
+          res = { start: plan.start, first: plan.first, end: late.end, last: late.last, alloc: before.concat(late.alloc) };
           R[t.id].warn.push('進度落後：原訂 ' + ds(plan.last) + ' 完成');
         }
         finish(t, res);
+        R[t.id].expect = Math.round(expect);
         var notDone = t._preds.filter(function (p) { var s = all[p].status; return s !== '完成' && s !== '待驗收'; });
         if (notDone.length) R[t.id].warn.push('已開始，但前置還沒完成：' + notDone.join('、'));
         if (who) cursor[who] = Math.max(cursor[who] || 0, res.end);
