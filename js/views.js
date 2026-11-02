@@ -666,19 +666,44 @@ function setPeople(box) {
     h += '<tr data-pi="' + i + '"' + (p.active ? '' : ' style="opacity:.6"') + '><td><span class="person">' + avatar(p.name, true) + '<b>' + esc(p.name) + '</b></span></td><td><input class="field" data-f="email" value="' + esc(p.email) + '"' + dis + '></td><td>' + roleSel('', p.role, dis) + '</td>' +
       '<td><input class="field" data-f="alias" value="' + esc(p.alias) + '"' + dis + '></td><td style="text-align:center"><input type="checkbox" data-f="active"' + (p.active ? ' checked' : '') + dis + '></td>' +
       '<td><input class="field" data-f="note" value="' + esc(p.note) + '"' + dis + '></td><td style="text-align:right">' + (d.usage[p.name] || 0) + '</td>' +
-      '<td style="white-space:nowrap">' + (admin ? '<button class="btn sm" data-psave="' + i + '" disabled>儲存</button> ' + (d.usage[p.name] ? '' : '<button class="btn sm danger" data-pdel="' + i + '">刪除</button>') : '') + '</td></tr>';
+      '<td style="white-space:nowrap">' + (admin ? '<span class="psv" data-pst></span> ' + (d.usage[p.name] ? '' : '<button class="btn sm danger" data-pdel="' + i + '">刪除</button>') : '') + '</td></tr>';
   });
-  h += '</tbody></table></div><div class="hint" style="margin-top:8px">姓名建立後不能改（工項用姓名對應負責人）。離職請取消勾選「在職」，歷史工項會保留。</div>';
+  h += '</tbody></table></div><div class="hint" style="margin-top:8px">修改後離開欄位（或按 Enter）會自動儲存，按 Esc 可取消這格的修改。姓名建立後不能改（工項用姓名對應負責人）。離職請取消勾選「在職」，歷史工項會保留。</div>';
   box.innerHTML = h;
   $('#ppQ').addEventListener('input', debounce(function (e) { S.peopleQ = e.target.value; setPeople(box); var n = $('#ppQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250));
   $('#ppOff').addEventListener('change', function (e) { S.peopleOff = e.target.checked; setPeople(box); });
   if (!admin) return;
-  $$('tr[data-pi]', box).forEach(function (tr) { var btn = $('[data-psave]', tr); $$('input,select', tr).forEach(function (el) { ['input', 'change'].forEach(function (ev) { el.addEventListener(ev, function () { btn.disabled = false; btn.classList.add('primary'); }); }); }); });
-  $$('[data-psave]', box).forEach(function (b) {
-    b.addEventListener('click', function () {
-      var p = list[+b.dataset.psave], tr = b.closest('tr');
-      var o = { email: $('[data-f=email]', tr).value, role: $('select', tr).value, alias: $('[data-f=alias]', tr).value, active: $('[data-f=active]', tr).checked, note: $('[data-f=note]', tr).value };
-      busy(true); call('savePerson', p.name, o).then(function () { busy(false); adminRefresh(); toast('已儲存：' + p.name); setPeople(box); }).catch(fail);
+  $$('tr[data-pi]', box).forEach(function (tr) {
+    var p = list[+tr.dataset.pi], cur = { email: p.email || '', role: p.role, alias: p.alias || '', active: !!p.active, note: p.note || '' };
+    var st = $('[data-pst]', tr), chain = Promise.resolve(), timer;
+    function read() { return { email: $('[data-f=email]', tr).value.trim(), role: $('select', tr).value, alias: $('[data-f=alias]', tr).value.trim(), active: $('[data-f=active]', tr).checked, note: $('[data-f=note]', tr).value.trim() }; }
+    function show(cls, txt) { clearTimeout(timer); st.className = 'psv ' + cls; st.textContent = txt; if (cls === 'ok') timer = setTimeout(function () { st.textContent = ''; st.className = 'psv'; }, 2500); }
+    function put(o) {
+      $('[data-f=email]', tr).value = o.email; $('select', tr).value = o.role; $('[data-f=alias]', tr).value = o.alias; $('[data-f=active]', tr).checked = o.active; $('[data-f=note]', tr).value = o.note;
+      tr.style.opacity = o.active ? '' : '.6';
+    }
+    function save(el) {
+      var o = read();
+      if (JSON.stringify(o) === JSON.stringify(cur)) return;
+      if (o.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email)) { show('err', 'Email 格式不正確'); el.classList.add('bad'); return; }
+      el.classList.remove('bad');
+      if (p.email && p.email === S.data.me.email && (o.role !== cur.role || !o.active) && !confirm('你正在修改自己的' + (o.active ? '角色' : '在職狀態') + '，可能會失去管理權限。確定嗎？')) { put(cur); return; }
+      if (S.preview) { put(cur); toast(PREVIEW_MSG, true); return; }
+      tr.style.opacity = o.active ? '' : '.6';
+      show('ing', '儲存中…');
+      chain = chain.then(function () {
+        return call('savePerson', p.name, o).then(function (np) {
+          cur = { email: np.email || '', role: np.role, alias: np.alias || '', active: !!np.active, note: np.note || '' };
+          adminRefresh(); show('ok', '✓ 已儲存');
+        }).catch(function (e) { put(cur); show('err', '未儲存'); toast((e && e.message) || String(e), true); });
+      });
+    }
+    $$('input[data-f],select', tr).forEach(function (el) {
+      el.addEventListener('change', function () { save(el); });
+      if (el.type !== 'checkbox' && el.tagName === 'INPUT') el.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+        else if (e.key === 'Escape') { el.value = cur[el.dataset.f]; el.classList.remove('bad'); el.blur(); }
+      });
     });
   });
   $$('[data-pdel]', box).forEach(function (b) {

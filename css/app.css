@@ -435,3 +435,6 @@ table.sheet tr.bad td { background: var(--danger-soft); }
 .pvbar { display: flex; align-items: center; gap: 8px; padding: 8px 22px; background: var(--warn-soft); color: var(--ink); border-bottom: 1px solid var(--line); font-size: 13px; flex-wrap: wrap; }
 .pvbar svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; color: var(--warn); }
 .pvbar .grow { flex: 1; }
+.psv { font-size: 12px; display: inline-block; min-width: 64px; }
+.psv.ing { color: var(--muted, #888); } .psv.ok { color: var(--ok, #1a9e5c); } .psv.err { color: var(--danger); }
+input.field.bad { box-shadow: 0 0 0 2px var(--danger); }
