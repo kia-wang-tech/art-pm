@@ -21,7 +21,7 @@ var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
 var WRITE_FNS = { saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
-  saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
+  archivePeriod: 1, unarchivePeriod: 1, saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
 var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
@@ -39,6 +39,7 @@ function need(name) {
 }
 
 var IC = {
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h8"/></svg>',
@@ -64,7 +65,7 @@ var ST_HEX = { '未開始': '#c4c6d0', '進行中': '#fdab3d', '待驗收': '#57
 var GROUP_COLORS = ['#579bfc', '#a25ddc', '#00a35c', '#fdab3d', '#e2445c', '#0086c0', '#ff642e', '#9cd326', '#bb3354', '#784bd1', '#00c7a7', '#cab641'];
 var S = {
   data: null, route: { view: 'home' }, q: '', owner: '', status: '', group: '', hideDone: true, onlyWarn: false,
-  collapsed: {}, picked: {}, sel: null, ganttScale: 'day', peopleRange: 90, peopleProject: '', minePerson: ''
+  collapsed: {}, picked: {}, sel: null, ganttScale: 'day', peopleRange: 90, peopleProject: '', minePerson: '', year: ''
 };
 var byId = {}, succ = {}, projById = {};
 try { var _ui = JSON.parse(localStorage.getItem('pm-ui2') || '{}'); ['hideDone', 'ganttScale', 'peopleRange', 'collapsed'].forEach(function (k) { if (k in _ui) S[k] = _ui[k]; }); } catch (e) {}
@@ -328,9 +329,30 @@ function projectHeader(p, view) {
   on('#tplBtn', openTemplate); on('#bulkBtn', openBulk); on('#projBtn', function () { openProject(p); });
 }
 function projectTasks(pid) { return S.data.tasks.filter(function (t) { return t.project === pid; }); }
+/* 考核年度：S.year 空白 = 本年度；'*' = 全部（未封存） */
+function periodSel() {
+  if (S.year === '*') return null;
+  var ps = API.periods();
+  return (S.year && ps.list.filter(function (x) { return x.label === S.year; })[0]) || ps.current;
+}
+function inPeriod(t, P) {
+  if (!P) return true;
+  var open = t.status !== '完成' && t.status !== '取消';
+  if (P.current && open) return true;
+  var a = t.start, b = t.end;
+  if (t.status === '取消' || !a) { a = b = t.aend || t.astart || (t.updatedAt || '').slice(0, 10); }
+  return !!a && a <= P.to && b >= P.from;
+}
+function yearSelect() {
+  var ps = API.periods(), cur = S.year || (ps.current ? ps.current.label : '*');
+  return '<select class="field" id="fYear" title="考核年度">' + ps.list.map(function (x) {
+    return '<option value="' + esc(x.label) + '"' + (x.label === cur ? ' selected' : '') + '>' + esc(x.label) + (x.current ? '（本年度）' : x.archived ? '（已封存）' : '') + '</option>';
+  }).join('') + '<option value="*"' + (cur === '*' ? ' selected' : '') + '>全部年度（未封存）</option></select>';
+}
 function filtered(list) {
-  var q = S.q.trim().toLowerCase();
+  var q = S.q.trim().toLowerCase(), P = periodSel();
   return list.filter(function (t) {
+    if (!inPeriod(t, P)) return false;
     if (S.hideDone && (t.status === '完成' || t.status === '取消')) return false;
     if (S.owner && t.owner !== S.owner) return false;
     if (S.status && t.status !== S.status) return false;
@@ -344,7 +366,7 @@ function filterBar(pid, right) {
   var tasks = projectTasks(pid), owners = {}, groups = {};
   tasks.forEach(function (t) { if (t.owner) owners[t.owner] = 1; if (t.group) groups[t.group] = 1; });
   var opt = function (list, v, all) { return '<option value="">' + all + '</option>' + list.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join(''); };
-  return '<div class="toolbar"><span class="search">' + IC.search + '<input type="search" class="field" id="fQ" placeholder="搜尋工項、人名、ID" value="' + esc(S.q) + '"></span>' +
+  return '<div class="toolbar">' + yearSelect() + '<span class="search">' + IC.search + '<input type="search" class="field" id="fQ" placeholder="搜尋工項、人名、ID" value="' + esc(S.q) + '"></span>' +
     '<select class="field" id="fOwner">' + opt(Object.keys(owners).sort(), S.owner, '所有負責人') + '</select>' +
     '<select class="field hide-m" id="fGroup">' + opt(Object.keys(groups).sort(), S.group, '所有群組') + '</select>' +
     '<select class="field hide-m" id="fStatus">' + opt(STATUSES, S.status, '所有狀態') + '</select>' +
@@ -357,6 +379,7 @@ function bindFilters() {
   var on = function (id, ev, fn) { var el = $(id); if (el) el.addEventListener(ev, fn); };
   on('#fQ', 'input', debounce(function (e) { S.q = e.target.value; var pos = e.target.selectionStart; render(); var n = $('#fQ'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (x) {} } }, 250));
   on('#fOwner', 'change', function (e) { S.owner = e.target.value; render(); });
+  on('#fYear', 'change', function (e) { var ps = API.periods(); S.year = (ps.current && e.target.value === ps.current.label) ? '' : e.target.value; S.picked = {}; render(); });
   on('#fGroup', 'change', function (e) { S.group = e.target.value; render(); });
   on('#fStatus', 'change', function (e) { S.status = e.target.value; if (S.status === '完成') S.hideDone = false; render(); });
   on('#fHide', 'click', function () { S.hideDone = !S.hideDone; remember(); render(); });
@@ -373,6 +396,7 @@ function groupsOf(list) {
 function renderBoard(c) {
   var p = projById[S.route.project];
   projectHeader(p, 'board');
+  var P = periodSel(); if (P && P.archived) return renderArchived(c, p, P);
   var list = filtered(projectTasks(p.id)).sort(sortTasks);
   var groups = groupsOf(list);
   var h = filterBar(p.id) + '<div class="board">';
@@ -400,6 +424,45 @@ function renderBoard(c) {
   bindFilters();
   bindBoard(c, p);
   renderBulkBar();
+}
+/* 已封存年度：唯讀清單 */
+function renderArchived(c, p, P) {
+  var token = (S.archTok = (S.archTok || 0) + 1), cached = API.archivedCached(P.label);
+  if (cached) return draw(cached);
+  c.innerHTML = '<div class="toolbar">' + yearSelect() + '</div><div class="card empty"><b>讀取 ' + esc(P.label) + ' 的封存資料…</b></div>';
+  bindFilters();
+  API.loadArchived(P.label).then(function (rows) { if (token === S.archTok) draw(rows); }).catch(fail);
+  function draw(rows) {
+    var all = rows.filter(function (t) { return t.project === p.id; }), owners = {}, q = S.q.trim().toLowerCase();
+    all.forEach(function (t) { if (t.owner) owners[t.owner] = 1; });
+    var list = all.filter(function (t) {
+      if (S.owner && t.owner !== S.owner) return false;
+      return !q || (t.id + ' ' + t.title + ' ' + t.detail + ' ' + t.group + ' ' + t.owner + ' ' + t.tag).toLowerCase().indexOf(q) >= 0;
+    }).sort(function (x, y) { return (x.aend || '') < (y.aend || '') ? -1 : (x.aend || '') > (y.aend || '') ? 1 : 0; });
+    var h = '<div class="toolbar">' + yearSelect() + '<span class="search">' + IC.search + '<input type="search" class="field" id="fQ" placeholder="搜尋工項、人名、ID" value="' + esc(S.q) + '"></span>' +
+      '<select class="field" id="fOwner"><option value="">所有負責人</option>' + Object.keys(owners).sort().map(function (o) { return '<option' + (o === S.owner ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>' +
+      '<span class="grow"></span><span class="muted">' + esc(P.from) + ' ～ ' + esc(P.to) + '・已封存 ' + list.length + ' 項</span><button class="btn" id="archDl">下載 Excel</button></div>';
+    if (!list.length) h += '<div class="card empty"><b>' + (all.length ? '沒有符合篩選的工項' : '這個專案在 ' + esc(P.label) + ' 沒有封存的工項') + '</b></div>';
+    else {
+      h += '<div class="card" style="overflow:auto"><table class="grid2"><thead><tr><th>群組</th><th>工項</th><th>負責</th><th>天數</th><th>實際開始</th><th>實際完成</th><th>狀態</th><th>ID</th></tr></thead><tbody>' +
+        list.map(function (t) { return '<tr><td>' + esc(t.group) + '</td><td><b>' + esc(t.title) + '</b>' + (t.detail ? '<div class="faint" style="font-size:12px">' + esc(t.detail) + '</div>' : '') + '</td><td>' + person(t.owner) + '</td><td style="text-align:right">' + esc(t.days) + '</td><td>' + esc(t.astart) + '</td><td>' + esc(t.aend) + '</td><td>' + pill(t.status) + '</td><td class="faint">' + esc(t.id) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    }
+    h += '<div class="hint" style="margin-top:8px">已封存的工項只能檢視。需要修改請管理員到「設定 → 年度封存」解除封存。</div>';
+    c.innerHTML = h;
+    bindFilters();
+    $('#archDl').addEventListener('click', function () { downloadTaskList(list, p.name + '_' + P.label); });
+  }
+}
+function downloadTaskList(list, file) {
+  busy(true);
+  need('XLSX').then(function () {
+    var rows = list.map(function (t) { return { '專案': projName(t.project), '群組': t.group, '工項': t.title, '說明': t.detail, '負責': t.owner, '天數': t.days, '實際開始': t.astart, '實際完成': t.aend, '狀態': t.status, '工項ID': t.id, '封存年度': t.archived }; });
+    var wb = XLSX.utils.book_new(), ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [12, 14, 30, 40, 10, 6, 11, 11, 8, 9, 10].map(function (w) { return { wch: w }; });
+    XLSX.utils.book_append_sheet(wb, ws, '工項');
+    XLSX.writeFile(wb, file.replace(/[\\\/\?\*\[\]:]/g, '_') + '.xlsx');
+    busy(false);
+  }).catch(fail);
 }
 function rowHtml(t, color, tmin, tmax) {
   var ed = canEdit(t), up = canUpdate(t), w = worst(t);

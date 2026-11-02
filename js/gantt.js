@@ -7,6 +7,7 @@ var G = null; // 目前畫面的幾何資訊
 function renderGantt(c) {
   var p = projById[S.route.project];
   projectHeader(p, 'gantt');
+  var P = periodSel(); if (P && P.archived) { c.className = 'content'; return renderArchived(c, p, P); }
   c.className = 'content flush';
   var right = '<span class="seg">' + [['day', '日'], ['week', '週'], ['month', '月']].map(function (o) { return '<button data-sc="' + o[0] + '" class="' + (S.ganttScale === o[0] ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</span><button class="btn" id="gToday">今天</button>';
   var list = filtered(projectTasks(p.id)).filter(function (t) { return t.start && t.end; }).sort(sortTasks);

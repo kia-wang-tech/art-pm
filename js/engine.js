@@ -114,7 +114,7 @@ var Engine = (function () {
       splitIds(t.preds).forEach(function (p) {
         if (p === t.id) { R[t.id].warn.push('前置不能是自己'); return; }
         var pt = all[p];
-        if (!pt) { R[t.id].warn.push('找不到前置 ' + p); return; }
+        if (!pt) { if (!input.lenientPreds) R[t.id].warn.push('找不到前置 ' + p); return; }
         if (pt.status === '取消') return;
         if (t._preds.indexOf(p) < 0) t._preds.push(p);
         (succ[p] = succ[p] || []).push(t.id);

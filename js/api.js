@@ -40,7 +40,7 @@ var API = (function () {
       lag: num(r.lag, 0), earliest: r.earliest || '', release: r.release || '', status: r.status, doneQty: num(r.done_qty, 0),
       qty: num(r.qty, 1), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', src: r.src || '',
       by: r.updated_by || '', updatedAt: r.updated_at ? new Date(new Date(r.updated_at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '',
-      at: r.version, version: r.version
+      at: r.version, version: r.version, archived: r.archived || ''
     };
   }
   function toDb(o) {
@@ -72,7 +72,7 @@ var API = (function () {
     var hol = {}, mk = {};
     cache.calendar.forEach(function (c) { if (c.type === '補班') mk[c.day] = 1; else hol[c.day] = c.name || '假日'; });
     return {
-      tasks: tasks, holidays: hol, makeup: mk, today: today(),
+      tasks: tasks, holidays: hol, makeup: mk, today: today(), lenientPreds: true,
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days }; })
     };
   }
@@ -94,6 +94,7 @@ var API = (function () {
     return m;
   }
   function putTask(t) {
+    if (t.archived) { dropTask(t.id); return; }
     if (cache.byId[t.id]) { var i = cache.tasks.indexOf(cache.byId[t.id]); cache.tasks[i] = t; }
     else cache.tasks.push(t);
     cache.byId[t.id] = t;
@@ -102,17 +103,18 @@ var API = (function () {
   function copyTask(t) { var o = {}; Object.keys(t).forEach(function (k) { o[k] = t[k]; }); return o; }
 
   /* ---------------- 讀取 ---------------- */
-  function fetchAll(table, order) {
-    return sb.from(table).select('*', { count: 'exact', head: true }).then(function (res) {
+  function fetchAll(table, order, where) {
+    where = where || function (q) { return q; };
+    return where(sb.from(table).select('*', { count: 'exact', head: true })).then(function (res) {
       chk(res);
       var n = res.count || 0, size = 1000, jobs = [];
-      for (var i = 0; i < Math.max(n, 1); i += size) jobs.push(sb.from(table).select('*').order(order).range(i, i + size - 1).then(chk));
+      for (var i = 0; i < Math.max(n, 1); i += size) jobs.push(where(sb.from(table).select('*')).order(order).range(i, i + size - 1).then(chk));
       return Promise.all(jobs).then(function (parts) { return [].concat.apply([], parts); });
     });
   }
   function loadAll() {
     return Promise.all([
-      fetchAll('tasks', 'id'), fetchAll('projects', 'id'), fetchAll('people', 'name'), fetchAll('calendar', 'day'),
+      fetchAll('tasks', 'id', function (q) { return q.is('archived', null); }), fetchAll('projects', 'id'), fetchAll('people', 'name'), fetchAll('calendar', 'day'),
       fetchAll('leaves', 'id'), fetchAll('templates', 'id'), fetchAll('settings', 'key')
     ]).then(function (r) {
       cache.tasks = r[0].map(fromDb); cache.byId = {};
@@ -129,7 +131,7 @@ var API = (function () {
   function snapshot(history) {
     var cutoff = Engine.dn(today()) - HISTORY_DAYS;
     var tasks = cache.tasks.filter(function (t) {
-      if (history || t.status !== '完成') return true;
+      if (true || history || t.status !== '完成') return true; // 舊資料改用「年度封存」管理，這裡全部載入
       var r = cache.out.result[t.id];
       return (Engine.dn(r.end) || 0) >= cutoff;
     }).map(view);
@@ -198,7 +200,8 @@ var API = (function () {
           if (msg.eventType === 'DELETE') { var id = msg.old && msg.old.id; if (id) { dropTask(id); pending.removed[id] = 1; } }
           else {
             var t = fromDb(msg.new), cur = cache.byId[t.id];
-            if (!cur || cur.version <= t.version) { putTask(t); pending.tasks[t.id] = 1; }
+            if (t.archived) { if (cur) { dropTask(t.id); pending.removed[t.id] = 1; } }
+            else if (!cur || cur.version <= t.version) { putTask(t); pending.tasks[t.id] = 1; }
             if (msg.new.updated_at > lastSync) lastSync = msg.new.updated_at;
           }
           notify();
@@ -215,7 +218,8 @@ var API = (function () {
         if (res.error || !res.data.length) return;
         res.data.forEach(function (r) {
           var t = fromDb(r), cur = cache.byId[t.id];
-          if (!cur || cur.version < t.version) { putTask(t); pending.tasks[t.id] = 1; }
+          if (t.archived) { if (cur) { dropTask(t.id); pending.removed[t.id] = 1; } }
+          else if (!cur || cur.version < t.version) { putTask(t); pending.tasks[t.id] = 1; }
           if (r.updated_at > lastSync) lastSync = r.updated_at;
         });
         notify();
@@ -571,23 +575,35 @@ var API = (function () {
   }
 
   /* ---------------- 個人排程表（下載 Excel，沿用舊格式） ---------------- */
-  function exportPersonal(from, to) {
+  /* opts = { names: [只匯出這些人], file: 檔名 }；會一併讀取期間內已封存的工項 */
+  function exportPersonal(from, to, opts) {
     if (!window.ExcelJS) return Promise.reject(new Error('Excel 元件還沒載入，請稍後再試。'));
+    opts = opts || {};
+    if (!from || !to || from > to) return Promise.reject(new Error('請選擇正確的日期區間。'));
+    var q = sb.from('tasks').select('*').not('archived', 'is', null).or('aend.gte.' + from + ',aend.is.null');
+    if (opts.names) q = q.in('owner', opts.names);
+    return q.limit(20000).then(chk).then(function (rows) {
+      return buildPersonal(from, to, opts, rows.map(fromDb));
+    }).catch(function (e) { throw err(e); });
+  }
+  function buildPersonal(from, to, opts, extra) {
     var a = Engine.dn(from), b = Engine.dn(to);
-    var people = cache.people.filter(function (p) { return p.active; }).map(function (p) { return p.name; });
-    var load = Engine.monthlyLoad(cache.out, engineInput(cache.tasks), people, from, to);
+    var allTasks = extra.length ? cache.tasks.concat(extra.filter(function (t) { return !cache.byId[t.id]; })) : cache.tasks;
+    var out = allTasks === cache.tasks ? cache.out : Engine.schedule(engineInput(allTasks));
+    var people = opts.names || cache.people.filter(function (p) { return p.active; }).map(function (p) { return p.name; });
+    var load = Engine.monthlyLoad(out, engineInput(allTasks), people, from, to);
     var wb = new ExcelJS.Workbook();
     var KIND = { '工作': 'FFFFF2CC', '跨日': 'FFFFF2CC', '監制': 'FFFFF2CC', '放假': 'FFF4CCCC', '排休': 'FFD9EAD3' };
     var ST = { '完成': 'FFB6D7A8', '待驗收': 'FFCFE2F3', '進行中': 'FFFFE599', '未開始': 'FFFFFFFF', '暫停': 'FFD9D9D9' };
     var hol = engineInput([]).holidays, made = 0;
     var fill = function (c, argb) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb } }; };
     people.forEach(function (name) {
-      var mine = cache.tasks.filter(function (t) { return t.owner === name && t.status !== '取消'; });
+      var mine = allTasks.filter(function (t) { return t.owner === name && t.status !== '取消'; });
       var blocks = [];
       Object.keys(load[name]).sort().forEach(function (mk) {
         var items = [];
         mine.forEach(function (t) {
-          var r = cache.out.result[t.id];
+          var r = out.result[t.id];
           var al = (r.alloc || []).filter(function (x) { return Engine.ds(x[0]).slice(0, 7) === mk && x[0] >= a && x[0] <= b; });
           if (!al.length) return;
           var used = al.reduce(function (s, x) { return s + x[1]; }, 0);
@@ -633,7 +649,7 @@ var API = (function () {
     return wb.xlsx.writeBuffer().then(function (buf) {
       var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       var url = URL.createObjectURL(blob), link = document.createElement('a');
-      link.href = url; link.download = '美術個人排程_' + from + '_' + to + '.xlsx';
+      link.href = url; link.download = (opts.file || '美術個人排程_' + from + '_' + to) + '.xlsx';
       document.body.appendChild(link); link.click(); link.remove();
       setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
       return { count: made, url: '' };
@@ -644,7 +660,7 @@ var API = (function () {
   var SHEETS = {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
-      done_qty: '完成數量', qty: '數量', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源' }],
+      done_qty: '完成數量', qty: '數量', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
@@ -694,6 +710,7 @@ var API = (function () {
       if (t.lag === null || isNaN(t.lag)) t.lag = 0;
       if (t.done_qty === null || isNaN(t.done_qty)) t.done_qty = 0;
       if (t.qty === null || isNaN(t.qty)) t.qty = 1;
+      t.archived = t.archived || null;
       t.updated_by = '匯入'; t.updated_at = now; t.version = 1;
       return t;
     });
@@ -726,6 +743,58 @@ var API = (function () {
     return sb.rpc('admin_import', { payload: payload }).then(chk).then(function (r) { return loadAll().then(function () { return r; }); }).catch(function (e) { throw err(e); });
   }
 
+  /* ---------------- 考核年度與封存 ---------------- */
+  function archiveRecs() {
+    try { var v = JSON.parse(cache.settings['封存紀錄'] || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+  }
+  function startMonth() { var m = parseInt(cache.settings['考核年度起始月'], 10); return m >= 1 && m <= 12 ? m : 11; }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  // 年度 Y（以結束那年命名）在目前設定下的起訖日
+  function rangeOf(Y, m) {
+    if (m === 1) return { from: Y + '-01-01', to: Y + '-12-31' };
+    return { from: (Y - 1) + '-' + pad2(m) + '-01', to: Engine.ds(Engine.dn(Y + '-' + pad2(m) + '-01') - 1) };
+  }
+  function yearOf(day, m) { var y = +day.slice(0, 4), mo = +day.slice(5, 7); return m === 1 || mo < m ? y : y + 1; }
+  /* 回傳 { startMonth, current, list:[{label, from, to, archived, current, count}] }，新的在前 */
+  function periods() {
+    var m = startMonth(), recs = archiveRecs().slice().sort(function (x, y) { return x.to < y.to ? -1 : 1; });
+    var lastTo = recs.length ? recs[recs.length - 1].to : '', t0 = today(), ys = {};
+    ys[yearOf(t0, m)] = 1;
+    cache.tasks.forEach(function (t) {
+      var r = cache.out && cache.out.result[t.id], e = t.aend || (r && r.end);
+      if (e) ys[yearOf(e, m)] = 1;
+      var st = t.astart || (r && r.start); if (st) ys[yearOf(st, m)] = 1;
+    });
+    var taken = {}; recs.forEach(function (r) { taken[r.label] = 1; });
+    var list = [];
+    Object.keys(ys).map(Number).forEach(function (Y) {
+      var r = rangeOf(Y, m);
+      if (lastTo && r.from <= lastTo) r.from = Engine.ds(Engine.dn(lastTo) + 1);
+      if (r.from > r.to) return;
+      var label = Y + '年度'; if (taken[label]) label += '（續）';
+      list.push({ label: label, from: r.from, to: r.to, archived: false, current: r.from <= t0 && t0 <= r.to });
+    });
+    recs.forEach(function (r) { list.push({ label: r.label, from: r.from, to: r.to, archived: true, count: r.count, at: r.at, by: r.by }); });
+    list.sort(function (x, y) { return x.from < y.from ? 1 : -1; });
+    return { startMonth: m, current: list.filter(function (x) { return x.current; })[0] || null, list: list };
+  }
+  var archCache = {};
+  function loadArchived(label) {
+    if (archCache[label]) return Promise.resolve(archCache[label]);
+    return fetchAll('tasks', 'id', function (q) { return q.eq('archived', label); }).then(function (rows) {
+      archCache[label] = rows.map(function (r) { var t = fromDb(r); t.start = t.astart || t.aend; t.end = t.aend || t.astart; t.warns = []; return t; });
+      return archCache[label];
+    }).catch(function (e) { throw err(e); });
+  }
+  function archivePeriod(label, from, to) {
+    return sb.rpc('archive_period', { p_label: label, p_from: from, p_to: to }).then(chk)
+      .then(function (n) { archCache = {}; return loadAll().then(function () { return n; }); }).catch(function (e) { throw err(e); });
+  }
+  function unarchivePeriod(label) {
+    return sb.rpc('unarchive_period', { p_label: label }).then(chk)
+      .then(function (n) { archCache = {}; return loadAll().then(function () { return n; }); }).catch(function (e) { throw err(e); });
+  }
+
   /* ---------------- 對外 ---------------- */
   return {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
@@ -735,6 +804,7 @@ var API = (function () {
     saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
     adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
     saveDay: saveDay, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
+    periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
     me: function () { return me; }
   };
 })();

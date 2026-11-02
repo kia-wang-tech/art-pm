@@ -8,7 +8,7 @@ function renderMine(c) {
   if (S.route.person && S.data.people.some(function (p) { return p.name === S.route.person; })) S.minePerson = S.route.person;
   var who = S.minePerson || d.me.name, self = who === d.me.name;
   setTitle('<span class="t">' + (self ? '我的工作' : esc(who) + ' 的工作') + '</span>');
-  if (isPM()) setActions('<select class="field" id="mWho">' + d.people.map(function (p) { return '<option' + (p.name === who ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select>');
+  setActions((isPM() ? '<select class="field" id="mWho">' + d.people.map(function (p) { return '<option' + (p.name === who ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select> ' : '') + '<button class="btn" id="mYear">' + IC.download + '<span class="hide-m">下載年度工作</span></button>');
   var today = dn(d.today);
   var mine = d.tasks.filter(function (t) { return t.owner === who && t.status !== '完成' && t.status !== '取消'; }).sort(function (a, b) { return (a.prio || 0) - (b.prio || 0) || sortTasks(a, b); });
   var predsDone = function (t) { return split(t.preds).every(function (p) { var x = byId[p]; return !x || x.status === '完成' || x.status === '待驗收'; }); };
@@ -40,6 +40,7 @@ function renderMine(c) {
   h += '</div>';
   c.innerHTML = h;
   var w = $('#mWho'); if (w) w.addEventListener('change', function (e) { go('mine/' + encodeURIComponent(e.target.value)); });
+  $('#mYear').addEventListener('click', function () { openYearExport(who); });
   $$('[data-act]', c).forEach(function (b) {
     b.addEventListener('click', function () {
       var t = byId[b.dataset.id], st = b.dataset.act;
@@ -569,9 +570,11 @@ function openLeave(name) {
 function openExport() {
   var t = S.data.today;
   var h = '<h3>下載個人排程表</h3><div class="hint">照舊表格式下載成 Excel：每人一個分頁、按月分段、跨月的工作標「跨日」，並算出每月可執行工天與空檔。</div>';
-  h += '<div class="form" style="margin-top:12px"><label>從<input class="field" type="date" id="eF" value="' + t.slice(0, 7) + '-01"></label><label>到<input class="field" type="date" id="eT" value="' + ds(dn(t) + 180) + '"></label></div>';
+  var pl = API.periods().list;
+  h += '<div class="form" style="margin-top:12px"><label>快速選年度<select class="field" id="eY"><option value="">自訂期間</option>' + pl.map(function (x) { return '<option value="' + esc(x.label) + '">' + esc(x.label) + (x.current ? '（本年度）' : '') + '</option>'; }).join('') + '</select></label><span></span><label>從<input class="field" type="date" id="eF" value="' + t.slice(0, 7) + '-01"></label><label>到<input class="field" type="date" id="eT" value="' + ds(dn(t) + 180) + '"></label></div>';
   h += '<div id="eRes" style="margin-top:10px"></div><div class="mfoot"><button class="btn" id="eC">關閉</button><button class="btn primary" id="eGo">下載 Excel</button></div>';
   modal(h);
+  $('#eY').addEventListener('change', function (e) { var P = pl.filter(function (x) { return x.label === e.target.value; })[0]; if (P) { $('#eF').value = P.from; $('#eT').value = P.to; } });
   $('#eC').addEventListener('click', closeModal);
   $('#eGo').addEventListener('click', function () {
     busy(true);
@@ -614,7 +617,7 @@ function openProject(p) {
 }
 
 /* ---------------- 設定 ---------------- */
-var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['calendar', '行事曆', false], ['templates', '範本', false], ['leaves', '休假', false], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
+var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['calendar', '行事曆', false], ['templates', '範本', false], ['leaves', '休假', false], ['years', '年度封存', true], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
 function adminRefresh() { S.data = API.refresh(S.data.history); index(); }
 function renderSettings(c) {
   setTitle('<span class="t">設定</span>');
@@ -623,13 +626,13 @@ function renderSettings(c) {
   var tab = S.route.tab && tabs.some(function (t) { return t[0] === S.route.tab; }) ? S.route.tab : tabs[0][0];
   c.innerHTML = '<div class="subtabs">' + tabs.map(function (t) { return '<button data-at="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="adminBody" style="max-width:1200px"></div>';
   $$('[data-at]', c).forEach(function (b) { b.addEventListener('click', function () { go('settings/' + b.dataset.at); }); });
-  ({ general: setGeneral, people: setPeople, calendar: setCalendar, templates: setTemplates, leaves: setLeaves, import: setImport, log: setLog })[tab]($('#adminBody'));
+  ({ general: setGeneral, people: setPeople, calendar: setCalendar, templates: setTemplates, leaves: setLeaves, years: setYears, import: setImport, log: setLog })[tab]($('#adminBody'));
 }
 function ro() { return isAdmin() ? '' : '<div class="box">只有管理員能修改這裡的資料，你目前只能檢視。</div>'; }
 
 function setGeneral(box) {
   var d = API.adminData(), get = function (k) { var r = d.settings.filter(function (x) { return x.key === k; })[0]; return r ? r.value : ''; };
-  var known = { '管理員': 1, '美術可見範圍': 1 };
+  var known = { '管理員': 1, '美術可見範圍': 1, '考核年度起始月': 1, '封存紀錄': 1 };
   var h = '<div class="card pad" style="max-width:720px"><div class="form" style="grid-template-columns:1fr">';
   h += '<label>管理員 Email<textarea class="field" id="sgAdmins" rows="3" placeholder="一行一個">' + esc(get('管理員').split(/[\s,，;；]+/).filter(Boolean).join('\n')) + '</textarea><span class="hint">這些人擁有全部權限。也可以在「人員」把某人的角色設成「管理員」。</span></label>';
   h += '<label>美術可以看到哪些工項<select class="field" id="sgScope" style="max-width:320px">' + [['全部', '全部專案'], ['參與的專案', '自己有工項的專案'], ['自己的工項', '只有自己的工項']].map(function (o) { return '<option value="' + o[0] + '"' + (get('美術可見範圍') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select><span class="hint">PM 和管理員一律看得到全部。</span></label>';
@@ -649,6 +652,103 @@ function setGeneral(box) {
   });
   $$('[data-osave]', box).forEach(function (b) {
     b.addEventListener('click', function () { var r = others[+b.dataset.osave]; busy(true); call('saveSetting', r.key, $('[data-ok="' + b.dataset.osave + '"]', box).value).then(function () { busy(false); adminRefresh(); toast('已儲存'); }).catch(fail); });
+  });
+}
+
+/* ---------------- 年度封存 ---------------- */
+function taskEndDay(t) { return t.aend || (t.updatedAt || '').slice(0, 10); }
+function setYears(box) {
+  var ps = API.periods(), today = S.data.today, tasks = S.data.tasks;
+  var h = '<div class="card pad" style="max-width:760px"><b style="font-size:15px">考核年度</b>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">每年從<select class="field" id="yM" style="width:90px">' +
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (m) { return '<option value="' + m + '"' + (m === ps.startMonth ? ' selected' : '') + '>' + m + ' 月</option>'; }).join('') +
+    '</select>開始<button class="btn primary" id="ySave">儲存</button><span class="muted">' + (ps.current ? '本年度：' + esc(ps.current.label) + '（' + ps.current.from + ' ～ ' + ps.current.to + '）' : '') + '</span></div>' +
+    '<div class="hint" style="margin-top:6px">年度用結束的那一年命名，例如從 11 月開始時，「2026年度」= 2025/11/1 ～ 2026/10/31。改起始月只影響還沒封存的年度，已封存的年度會保留原本的起訖日。</div></div>';
+  var past = ps.list.filter(function (x) { return !x.archived && x.to < today; });
+  var oldest = past.length ? past[past.length - 1].label : '';
+  h += '<div class="card pad" style="max-width:960px;margin-top:14px"><b style="font-size:15px">各年度資料</b>' +
+    '<div class="hint" style="margin:4px 0 10px">封存會把該年度內「完成」或「取消」的工項移出日常畫面，網頁會比較輕快；資料不會刪除，在專案表格上方選擇年度就能查看，也能隨時解除封存。還沒完成的工項不會被封存。請由舊到新依序封存。</div>' +
+    '<table class="grid2"><thead><tr><th>年度</th><th>期間</th><th>狀態</th><th style="text-align:right">工項</th><th></th></tr></thead><tbody>';
+  ps.list.forEach(function (P) {
+    var st, n, act = '';
+    if (P.archived) {
+      st = '<span class="pill st-完成">已封存</span>' + (P.at ? '<div class="faint" style="font-size:12px">' + esc(P.at) + (P.by ? ' ' + esc(P.by) : '') + '</div>' : '');
+      n = P.count || 0;
+      act = '<button class="btn sm" data-ydl="' + esc(P.label) + '">下載 Excel</button> <button class="btn sm" data-yun="' + esc(P.label) + '">解除封存</button>';
+    } else {
+      var done = tasks.filter(function (t) { return (t.status === '完成' || t.status === '取消') && taskEndDay(t) >= P.from && taskEndDay(t) <= P.to; }).length;
+      var open = tasks.filter(function (t) { return t.status !== '完成' && t.status !== '取消' && inPeriod(t, { from: P.from, to: P.to }); }).length;
+      n = done + (open ? '<div class="faint" style="font-size:12px">另有 ' + open + ' 項未完成</div>' : '');
+      if (P.current) st = '<span class="pill st-進行中">本年度</span>';
+      else if (P.to >= today) st = '<span class="pill st-未開始">未來</span>';
+      else {
+        st = '<span class="pill st-待驗收">可以封存</span>';
+        act = P.label === oldest ? '<button class="btn sm primary" data-yar="' + esc(P.label) + '"' + (done ? '' : ' disabled') + '>封存</button>' : '<span class="faint" style="font-size:12px">請先封存較早的年度</span>';
+      }
+    }
+    h += '<tr><td><b>' + esc(P.label) + '</b></td><td>' + P.from + ' ～ ' + P.to + '</td><td>' + st + '</td><td style="text-align:right">' + n + '</td><td style="white-space:nowrap;text-align:right">' + act + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  box.innerHTML = h;
+  $('#ySave').addEventListener('click', function () {
+    busy(true); call('saveSetting', '考核年度起始月', $('#yM').value).then(function () { busy(false); adminRefresh(); toast('已儲存'); setYears(box); }).catch(fail);
+  });
+  $$('[data-ydl]', box).forEach(function (b) {
+    b.addEventListener('click', function () { busy(true); API.loadArchived(b.dataset.ydl).then(function (rows) { busy(false); downloadTaskList(rows, '封存工項_' + b.dataset.ydl); }).catch(fail); });
+  });
+  $$('[data-yun]', box).forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (!confirm('解除「' + b.dataset.yun + '」的封存？這些工項會回到日常畫面。')) return;
+      busy(true); call('unarchivePeriod', b.dataset.yun).then(function (n) { busy(false); S.year = ''; adminRefresh(); render(); toast('已解除封存 ' + n + ' 個工項'); }).catch(fail);
+    });
+  });
+  $$('[data-yar]', box).forEach(function (b) {
+    b.addEventListener('click', function () { openArchive(ps.list.filter(function (x) { return x.label === b.dataset.yar; })[0]); });
+  });
+}
+function openArchive(P) {
+  var h = '<h3>封存 ' + esc(P.label) + '</h3><div class="hint">結束日（含）以前、開始日以後完成或取消的工項會被封存。可以視需要微調日期。</div>' +
+    '<div class="form" style="margin-top:12px"><label>名稱<input class="field" id="aL" value="' + esc(P.label) + '"></label><span></span>' +
+    '<label>開始日<input class="field" type="date" id="aF" value="' + P.from + '"></label><label>結束日<input class="field" type="date" id="aT" value="' + P.to + '"></label></div>' +
+    '<label class="chk" style="margin-top:12px"><input type="checkbox" id="aBk" checked>封存前先下載這些工項的 Excel 備份</label>' +
+    '<div id="aInfo" class="box" style="margin-top:10px"></div><div class="mfoot"><button class="btn" id="aC">取消</button><button class="btn primary" id="aGo">封存</button></div>';
+  modal(h);
+  function pick() {
+    var f = $('#aF').value, t = $('#aT').value;
+    return S.data.tasks.filter(function (x) { return (x.status === '完成' || x.status === '取消') && taskEndDay(x) >= f && taskEndDay(x) <= t; });
+  }
+  function info() { $('#aInfo').textContent = '會封存 ' + pick().length + ' 個工項。'; }
+  info(); $('#aF').addEventListener('change', info); $('#aT').addEventListener('change', info);
+  $('#aC').addEventListener('click', closeModal);
+  $('#aGo').addEventListener('click', function () {
+    var L = $('#aL').value.trim(), f = $('#aF').value, t = $('#aT').value, list = pick();
+    if (!L) { toast('請填名稱', true); return; }
+    if (!f || !t || f > t) { toast('日期區間不正確', true); return; }
+    if (t >= S.data.today) { toast('只能封存已經結束的年度', true); return; }
+    if ($('#aBk').checked) downloadTaskList(list.map(function (x) { var o = Object.assign({}, x); o.archived = L; return o; }), '封存工項_' + L);
+    busy(true);
+    call('archivePeriod', L, f, t).then(function (n) { busy(false); closeModal(); S.year = ''; adminRefresh(); render(); toast('已封存 ' + n + ' 個工項'); }).catch(fail);
+  });
+}
+
+/* ---------------- 下載個人年度工作排程 ---------------- */
+function openYearExport(who) {
+  var ps = API.periods(), list = ps.list, today = S.data.today;
+  var def = list.filter(function (x) { return x.to < today; })[0] || ps.current || list[0];
+  var h = '<h3>下載' + (who === S.data.me.name ? '我' : esc(who)) + '的年度工作排程</h3><div class="hint">照「個人排程表」的格式下載 Excel：按月分段，列出這段期間有參與的工項（包含已封存的），方便填寫自評表。</div>' +
+    '<div class="form" style="margin-top:12px"><label>年度<select class="field" id="yxY">' + list.map(function (x) { return '<option value="' + esc(x.label) + '"' + (x === def ? ' selected' : '') + '>' + esc(x.label) + (x.current ? '（本年度）' : '') + '</option>'; }).join('') + '<option value="">自訂期間</option></select></label><span></span>' +
+    '<label>從<input class="field" type="date" id="yxF"></label><label>到<input class="field" type="date" id="yxT"></label></div>' +
+    '<div class="mfoot"><button class="btn" id="yxC">關閉</button><button class="btn primary" id="yxGo">下載 Excel</button></div>';
+  modal(h);
+  function fill() { var P = list.filter(function (x) { return x.label === $('#yxY').value; })[0]; if (P) { $('#yxF').value = P.from; $('#yxT').value = P.to; } }
+  fill(); $('#yxY').addEventListener('change', fill);
+  ['#yxF', '#yxT'].forEach(function (id) { $(id).addEventListener('input', function () { $('#yxY').value = ''; }); });
+  $('#yxC').addEventListener('click', closeModal);
+  $('#yxGo').addEventListener('click', function () {
+    var f = $('#yxF').value, t = $('#yxT').value, label = $('#yxY').value || (f + '_' + t);
+    busy(true);
+    need('ExcelJS').then(function () { return call('exportPersonal', f, t, { names: [who], file: '工作排程_' + who + '_' + label }); })
+      .then(function (r) { busy(false); if (!r.count) toast('這段期間沒有' + who + '的工項', true); else { closeModal(); toast('已下載'); } }).catch(fail);
   });
 }
 
