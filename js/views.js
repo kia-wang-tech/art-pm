@@ -1063,7 +1063,7 @@ API.onChange(function (ev) {
 
 /* ---------------- 啟動 ---------------- */
 function gate(html) {
-  $('#root').innerHTML = '<div class="gate"><div class="card"><div class="brand" style="padding:0"><span class="mark">' + IC.gantt + '</span>美術專案管理</div>' + html + '</div></div>';
+  $('#root').innerHTML = '<div class="gate"><div class="card"><div class="brand" style="padding:0"><span class="mark">' + IC.brand + '</span>美術專案管理</div>' + html + '</div></div>';
 }
 API.init().then(function (r) {
   if (r.state === 'config') return gate('<h2>還沒設定資料庫</h2><p class="muted">請在 <code>js/config.js</code> 填入 Supabase 的網址和金鑰。</p>');

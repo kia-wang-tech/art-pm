@@ -46,6 +46,7 @@ var IC = {
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h8"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   board: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+  brand: '<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round"><path d="M5 6.5h7.5" stroke="currentColor"/><path d="M9.5 12h9" stroke="currentColor"/><path d="M6.5 17.5h5.5" stroke="#ffd166"/></svg>',
   gantt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h8M8 12h10M6 18h7"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -263,7 +264,7 @@ function renderShell() {
   var d = S.data;
   $('#root').innerHTML =
     '<div class="app">' +
-    '<aside class="side"><div class="brand"><span class="mark">' + IC.gantt + '</span>美術專案管理</div><nav class="nav" id="nav"></nav>' +
+    '<aside class="side"><div class="brand"><span class="mark">' + IC.brand + '</span>美術專案管理</div><nav class="nav" id="nav"></nav>' +
     '<div class="side-foot">' + avatar(d.me.name) + '<div class="who"><b>' + esc(d.me.name) + '</b><span>' + esc(d.me.role) + '</span></div>' +
     ((S.realData && S.realData.me.role === '管理員' && !S.preview) ? '<button class="btn ghost icon" id="pvBtn" title="以其他人的視角預覽">' + IC.eye + '</button>' : '') +
     '<button class="btn ghost icon" id="themeBtn"></button><button class="btn ghost icon" id="logoutBtn" title="登出">' + IC.logout + '</button></div></aside>' +
@@ -323,6 +324,21 @@ function renderHome(c) {
   var d = S.data;
   setTitle('<span class="t">首頁</span>');
   var act = d.projects.filter(function (p) { return p.status !== '封存'; });
+  // 一般美術：只看自己的工項，以及和自己的工項有前後關係的工項
+  var artist = !isPM(), pool = d.tasks, me = d.me.name;
+  S._rel = null;
+  if (artist) {
+    var rel = {};
+    d.tasks.forEach(function (t) {
+      if (t.owner !== me) return;
+      rel[t.id] = '';
+      split(t.preds).forEach(function (x) { if (byId[x] && byId[x].owner !== me) rel[x] = '你在等這項'; });
+      (succ[t.id] || []).forEach(function (x) { if (byId[x] && byId[x].owner !== me && rel[x] === undefined) rel[x] = '在等你完成'; });
+    });
+    S._rel = rel;
+    pool = d.tasks.filter(function (t) { return rel[t.id] !== undefined; });
+    act = act.filter(function (p) { return d.tasks.some(function (t) { return t.project === p.id && t.owner === me; }); });
+  }
   var h = '<div class="home-h"><h2>' + greet() + '，' + esc(d.me.name) + '</h2><span class="muted">今天是 ' + d.today.replace(/-/g, '/') + '（' + '日一二三四五六'[wk(dn(d.today))] + '）</span></div>';
   h += '<div class="cards">';
   act.forEach(function (p) {
@@ -338,17 +354,18 @@ function renderHome(c) {
       '<div class="row3"><span><b>' + open.filter(function (t) { return t.status === '進行中'; }).length + '</b>進行中</span><span><b>' + open.filter(function (t) { return t.status === '待驗收'; }).length + '</b>待驗收</span>' +
       '<span class="' + (late ? 'meh' : '') + '"><b>' + late + '</b>落後</span><span class="' + (over ? 'bad' : '') + '"><b>' + over + '</b>超過出版日</span></div></div>';
   });
-  if (!act.length) h += '<div class="card empty"><b>還沒有專案</b>' + (isPM() ? '從左側「專案」旁的 ＋ 新增第一個專案。' : '請 PM 建立專案。') + '</div>';
+  if (!act.length) h += '<div class="card empty"><b>' + (artist ? '你目前沒有負責的專案' : '還沒有專案') + '</b>' + (isPM() ? '從左側「專案」旁的 ＋ 新增第一個專案。' : '有工項指派給你之後，專案會出現在這裡。') + '</div>';
   h += '</div>';
-  var issues = d.tasks.filter(function (t) { return (t.warns || []).length && t.status !== '完成' && t.status !== '取消' && projById[t.project] && projById[t.project].status !== '封存'; });
+  var issues = pool.filter(function (t) { return (t.warns || []).length && t.status !== '完成' && t.status !== '取消' && projById[t.project] && projById[t.project].status !== '封存'; });
   var order = function (t) { var w = t.warns.join(' '); return /循環/.test(w) ? 0 : /超過出版日/.test(w) ? 1 : /進度落後/.test(w) ? 2 : /排序衝突/.test(w) ? 3 : 4; };
   issues.sort(function (a, b) { return order(a) - order(b) || (a.end || '').localeCompare(b.end || ''); });
+  if (artist) h += '<div class="hint" style="margin:18px 0 -6px">下面只列出你的工項，以及你在等的、在等你完成的工項。</div>';
   h += '<div class="home2"><section>';
   h += '<div class="sec-h"><h3>需要注意</h3><span class="faint">' + issues.length + ' 項</span></div>';
   h += issues.length ? '<div class="list">' + issues.slice(0, 50).map(listItem).join('') + '</div>' + (issues.length > 50 ? '<div class="hint" style="margin-top:6px">只列出前 50 項，其餘請到各專案的主表格勾選「只看有警示」。</div>' : '')
     : '<div class="list empty"><b>目前沒有警示</b>所有工項都在出版日前、照基準進行。</div>';
   var today = dn(d.today), wkEnd = today + 7;
-  var due = d.tasks.filter(function (t) { return t.status !== '完成' && t.status !== '取消' && t.end && dn(t.end) >= today && dn(t.end) <= wkEnd; }).sort(sortTasks);
+  var due = pool.filter(function (t) { return t.status !== '完成' && t.status !== '取消' && t.end && dn(t.end) >= today && dn(t.end) <= wkEnd; }).sort(sortTasks);
   h += '</section><section><div class="sec-h"><h3>七天內預計完成</h3><span class="faint">' + due.length + ' 項</span></div>';
   h += due.length ? '<div class="list">' + due.slice(0, 40).map(listItem).join('') + '</div>' : '<div class="list empty">七天內沒有預計完成的工項。</div>';
   h += '</section></div>';
@@ -361,7 +378,7 @@ function listItem(t) {
   return '<div class="li" data-id="' + esc(t.id) + '"><span class="dot" style="width:10px;height:10px;border-radius:3px;background:' + pcolor(t.project) + '"></span>' +
     '<div class="t"><b>' + esc(t.title) + '</b><span>' + esc(projName(t.project)) + (t.group ? '・' + esc(t.group) : '') + '</span></div>' +
     '<div class="who">' + person(t.owner) + '</div>' +
-    '<div class="meta">' + pill(t.status) + '<span class="faint">預計 ' + md(t.end) + '</span>' + progBar(t) +
+    '<div class="meta">' + (S._rel && S._rel[t.id] ? '<span class="wtag ' + (S._rel[t.id] === '在等你完成' ? 'w' : 'ok') + '">' + S._rel[t.id] + '</span>' : '') + pill(t.status) + '<span class="faint">預計 ' + md(t.end) + '</span>' + progBar(t) +
     (t.warns || []).slice(0, 2).map(function (w) { return '<span class="wtag ' + sev(w) + '">' + esc(w) + '</span>'; }).join('') + '</div></div>';
 }
 
