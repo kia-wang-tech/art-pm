@@ -563,6 +563,9 @@ var API = (function () {
   }
 
   /* ---------------- 異動紀錄 ---------------- */
+  function getTaskLog(id) {
+    return sb.from('audit_log').select('*').eq('ref', id).order('at', { ascending: false }).limit(100).then(chk).catch(function (e) { throw err(e); });
+  }
   function getLog(limit) {
     return sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit || 300).then(chk).catch(function (e) { throw err(e); });
   }
@@ -729,7 +732,7 @@ var API = (function () {
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: saveTask, setStatus: setStatus, previewTask: previewTask, deleteTask: deleteTask, reorderQueue: reorderQueue,
     applyTemplate: applyTemplate, bulkAdd: bulkAdd, bulkStatus: bulkStatus, saveProject: saveProject, resetBaseline: resetBaseline,
-    saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
+    saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
     adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
     saveDay: saveDay, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
     me: function () { return me; }
