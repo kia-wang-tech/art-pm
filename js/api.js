@@ -535,6 +535,18 @@ var API = (function () {
       return c;
     }).catch(function (e) { throw err(e); });
   }
+  /* 一次寫入多天（行事曆匯入） */
+  function saveDays(list) {
+    var rows = list.map(function (o) { return { day: o.day, type: o.type === '補班' ? '補班' : '假日', name: o.name || '' }; });
+    if (!rows.length) return Promise.resolve({ count: 0 });
+    return sb.from('calendar').upsert(rows, { onConflict: 'day' }).select().then(function (res) {
+      var got = chk(res);
+      if (!got.length) throw new Error('你沒有修改行事曆的權限。');
+      var m = {}; got.forEach(function (c) { m[c.day] = c; });
+      cache.calendar = cache.calendar.filter(function (x) { return !m[x.day]; }).concat(got);
+      return { count: got.length };
+    }).catch(function (e) { throw err(e); });
+  }
   function deleteDay(day) {
     return sb.from('calendar').delete().eq('day', day).select('day').then(function (res) {
       if (!chk(res).length) throw new Error('你沒有修改行事曆的權限。');
@@ -845,7 +857,7 @@ var API = (function () {
     applyTemplate: applyTemplate, bulkAdd: bulkAdd, bulkStatus: bulkStatus, saveProject: saveProject, resetBaseline: resetBaseline,
     saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
     adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
-    saveDay: saveDay, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
+    saveDay: saveDay, saveDays: saveDays, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
     setManagedProjects: setManagedProjects, periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
     me: function () { return me; }
   };

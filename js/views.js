@@ -933,13 +933,57 @@ function openEmailPaste(box) {
   });
 }
 
+/* 行事曆匯入：讀「日期、名稱、類型」，類型空白＝假日 */
+function calDate(v) {
+  if (v instanceof Date && !isNaN(v)) return ds(Math.round(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate()) / 864e5));
+  if (typeof v === 'number' && v > 20000 && v < 80000) return ds(Math.round(v) - 25569);
+  var m = /^\s*(\d{4})\s*[-\/.年]\s*(\d{1,2})\s*[-\/.月]\s*(\d{1,2})/.exec(String(v || ''));
+  if (!m) return '';
+  var s = m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+  return ds(dn(s)) === s ? s : '';
+}
+function openCalImport(box, rows, existing) {
+  rows = rows.filter(function (r) { return r.some(function (x) { return String(x).trim() !== ''; }); });
+  var head = (rows[0] || []).map(function (x) { return String(x).trim(); }), ci = { d: 0, n: 1, t: 2 };
+  if (head.some(function (x) { return /日期/.test(x); })) {
+    head.forEach(function (x, i) { if (/日期/.test(x)) ci.d = i; else if (/名稱|假日|說明/.test(x)) ci.n = i; else if (/類型|種類/.test(x)) ci.t = i; });
+    rows = rows.slice(1);
+  }
+  var have = {}; existing.forEach(function (c) { have[c.day] = c; });
+  var seen = {}, out = [];
+  rows.forEach(function (r, i) {
+    var day = calDate(r[ci.d]), name = String(r[ci.n] || '').trim(), tt = String(r[ci.t] || '').trim();
+    var o = { line: i + 1, raw: String(r[ci.d] || ''), day: day, name: name, type: /補班|上班/.test(tt) ? '補班' : '假日' };
+    if (!day) o.skip = '看不懂日期';
+    else if (seen[day]) o.skip = '和上面重複';
+    else if (o.type === '假日' && (wk(dn(day)) === 0 || wk(dn(day)) === 6)) o.skip = '週末本來就不排工作';
+    else { var h = have[day]; o.st = !h ? '新增' : (h.name === name && h.type === o.type) ? '沒有變更' : '更新（原本：' + h.type + ' ' + h.name + '）'; }
+    if (day) seen[day] = 1;
+    out.push(o);
+  });
+  var go = out.filter(function (o) { return !o.skip && o.st !== '沒有變更'; });
+  var h = '<h3>匯入行事曆</h3><div class="hint">讀到 ' + out.length + ' 列，' + go.length + ' 天會新增或更新。</div>' +
+    '<div style="max-height:360px;overflow:auto;margin-top:10px"><table class="grid2"><thead><tr><th>日期</th><th>星期</th><th>名稱</th><th>類型</th><th>結果</th></tr></thead><tbody>' +
+    out.map(function (o) { return '<tr' + (o.skip ? ' style="opacity:.55"' : '') + '><td>' + esc(o.day || o.raw) + '</td><td>' + (o.day ? '日一二三四五六'[wk(dn(o.day))] : '') + '</td><td>' + esc(o.name) + '</td><td>' + (o.type === '補班' ? '<span class="wtag w">補班</span>' : '假日') + '</td><td>' + (o.skip ? '<span class="faint">略過：' + esc(o.skip) + '</span>' : o.st === '新增' ? '<span class="wtag ok">新增</span>' : esc(o.st)) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+    '<div class="mfoot"><button class="btn" id="ciC">取消</button><button class="btn primary" id="ciGo"' + (go.length ? '' : ' disabled') + '>匯入 ' + go.length + ' 天</button></div>';
+  modal(h);
+  $('#ciC').addEventListener('click', closeModal);
+  $('#ciGo').addEventListener('click', function () {
+    busy(true);
+    call('saveDays', go).then(function (r) {
+      busy(false); closeModal(); S.calYear = go[0].day.slice(0, 4); adminRefresh(); toast('已匯入 ' + r.count + ' 天，時程已重算'); setCalendar(box);
+    }).catch(fail);
+  });
+}
+
 function setCalendar(box) {
   var d = API.adminData(), admin = isAdmin(), years = {};
   d.calendar.forEach(function (c) { years[c.day.slice(0, 4)] = 1; });
   var yNow = S.data.today.slice(0, 4); years[yNow] = 1;
   var y = S.calYear || yNow, list = d.calendar.filter(function (c) { return c.day.slice(0, 4) === y; }), WD = '日一二三四五六';
   var h = ro() + '<div class="toolbar" style="padding:0 0 12px"><span class="seg">' + Object.keys(years).sort().map(function (k) { return '<button data-y="' + k + '" class="' + (k === y ? 'on' : '') + '">' + k + '</button>'; }).join('') + '</span><span class="muted">' + list.filter(function (c) { return c.type === '假日'; }).length + ' 天假日、' + list.filter(function (c) { return c.type === '補班'; }).length + ' 天補班</span></div>';
-  if (admin) h += '<div class="card pad" style="margin-bottom:12px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input class="field" type="date" id="cDay" title="開始日"><span class="faint">到</span><input class="field" type="date" id="cDay2" title="結束日（選填）"><select class="field" id="cType"><option>假日</option><option>補班</option></select><input class="field" id="cName" placeholder="名稱，例如 中秋節" style="flex:1;min-width:160px"><button class="btn primary" id="cAdd">新增</button></div><div class="hint" style="margin-top:6px">週六、週日本來就不排工作，不用加。連假可以填結束日，會自動跳過週末。</div></div>';
+  if (admin) h += '<div class="card pad" style="margin-bottom:12px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input class="field" type="date" id="cDay" title="開始日"><span class="faint">到</span><input class="field" type="date" id="cDay2" title="結束日（選填）"><select class="field" id="cType"><option>假日</option><option>補班</option></select><input class="field" id="cName" placeholder="名稱，例如 中秋節" style="flex:1;min-width:160px"><button class="btn primary" id="cAdd">新增</button></div><div class="hint" style="margin-top:6px">週六、週日本來就不排工作，不用加。連假可以填結束日，會自動跳過週末。</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)"><label class="btn" style="cursor:pointer">匯入 Excel<input type="file" id="cFile" accept=".xlsx,.xls,.csv" hidden></label><button class="btn ghost" id="cTpl">下載範本</button><span class="hint">欄位：日期、名稱、類型（選填，空白＝假日；可填「補班」）。已經有的日期會被更新。</span></div></div>';
   h += '<div class="tablewrap" style="max-height:calc(100vh - 330px);max-width:720px"><table class="grid2"><thead><tr><th>日期</th><th>星期</th><th>類型</th><th>名稱</th><th></th></tr></thead><tbody>' +
     (list.length ? list.map(function (c, i) { return '<tr><td>' + c.day + '</td><td>' + WD[new Date(c.day + 'T00:00:00Z').getUTCDay()] + '</td><td>' + (c.type === '補班' ? '<span class="wtag w">補班</span>' : '假日') + '</td><td>' + esc(c.name) + '</td><td style="width:70px">' + (admin ? '<button class="btn sm danger" data-cdel="' + i + '">刪除</button>' : '') + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">這一年還沒有設定假日。</td></tr>') + '</tbody></table></div>';
   box.innerHTML = h;
@@ -954,6 +998,23 @@ function setCalendar(box) {
     busy(true);
     days.reduce(function (p, day) { return p.then(function () { return call('saveDay', { day: day, type: type, name: name }); }); }, Promise.resolve())
       .then(function () { busy(false); S.calYear = a.slice(0, 4); adminRefresh(); toast('已新增 ' + days.length + ' 天，時程已重算'); setCalendar(box); }).catch(fail);
+  });
+  $('#cTpl').addEventListener('click', function () {
+    need('XLSX').then(function () {
+      var ny = +S.data.today.slice(0, 4) + 1;
+      var ws = XLSX.utils.aoa_to_sheet([['日期', '名稱', '類型'], [ny + '-01-01', '元旦', ''], [ny + '-02-20', '補班範例', '補班']]);
+      ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 8 }];
+      var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '行事曆'); XLSX.writeFile(wb, '行事曆匯入範本.xlsx');
+    }).catch(fail);
+  });
+  $('#cFile').addEventListener('change', function (e) {
+    var f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    busy(true);
+    need('XLSX').then(function () { return f.arrayBuffer(); }).then(function (buf) {
+      busy(false);
+      var wb = XLSX.read(buf, { type: 'array', cellDates: true }), ws = wb.Sheets[wb.SheetNames[0]];
+      openCalImport(box, XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }), d.calendar);
+    }).catch(fail);
   });
   $$('[data-cdel]', box).forEach(function (b) { b.addEventListener('click', function () { var c = list[+b.dataset.cdel]; busy(true); call('deleteDay', c.day).then(function () { busy(false); adminRefresh(); toast('已刪除 ' + c.day); setCalendar(box); }).catch(fail); }); });
 }
