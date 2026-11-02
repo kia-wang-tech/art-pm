@@ -357,7 +357,7 @@ function renderHome(c) {
   if (!act.length) h += '<div class="card empty"><b>' + (artist ? '你目前沒有負責的專案' : '還沒有專案') + '</b>' + (isPM() ? '從左側「專案」旁的 ＋ 新增第一個專案。' : '有工項指派給你之後，專案會出現在這裡。') + '</div>';
   h += '</div>';
   var issues = pool.filter(function (t) { return (t.warns || []).length && t.status !== '完成' && t.status !== '取消' && projById[t.project] && projById[t.project].status !== '封存'; });
-  var order = function (t) { var w = t.warns.join(' '); return /循環/.test(w) ? 0 : /超過出版日/.test(w) ? 1 : /進度落後/.test(w) ? 2 : /排序衝突/.test(w) ? 3 : 4; };
+  var order = function (t) { var w = t.warns.join(' '); return /循環/.test(w) ? 0 : /超過出版日/.test(w) ? 1 : /進度落後|未回報/.test(w) ? 2 : /排序衝突/.test(w) ? 3 : 4; };
   issues.sort(function (a, b) { return order(a) - order(b) || (a.end || '').localeCompare(b.end || ''); });
   if (artist) h += '<div class="hint" style="margin:18px 0 -6px">下面只列出你的工項，以及你在等的、在等你完成的工項。</div>';
   h += '<div class="home2"><section>';

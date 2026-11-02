@@ -625,7 +625,7 @@ function openProject(p) {
 }
 
 /* ---------------- 設定 ---------------- */
-var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['calendar', '行事曆', false], ['templates', '範本', false], ['leaves', '休假', false], ['years', '年度封存', true], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
+var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['calendar', '行事曆', false], ['templates', '範本', false], ['leaves', '休假', false], ['remind', '提醒通知', true], ['years', '年度封存', true], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
 function adminRefresh() { S.data = API.refresh(S.data.history); index(); }
 function renderSettings(c) {
   setTitle('<span class="t">設定</span>');
@@ -634,13 +634,13 @@ function renderSettings(c) {
   var tab = S.route.tab && tabs.some(function (t) { return t[0] === S.route.tab; }) ? S.route.tab : tabs[0][0];
   c.innerHTML = '<div class="subtabs">' + tabs.map(function (t) { return '<button data-at="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div><div id="adminBody" style="max-width:1200px"></div>';
   $$('[data-at]', c).forEach(function (b) { b.addEventListener('click', function () { go('settings/' + b.dataset.at); }); });
-  ({ general: setGeneral, people: setPeople, calendar: setCalendar, templates: setTemplates, leaves: setLeaves, years: setYears, import: setImport, log: setLog })[tab]($('#adminBody'));
+  ({ general: setGeneral, people: setPeople, calendar: setCalendar, templates: setTemplates, leaves: setLeaves, remind: setRemind, years: setYears, import: setImport, log: setLog })[tab]($('#adminBody'));
 }
 function ro() { return isAdmin() ? '' : '<div class="box">只有管理員能修改這裡的資料，你目前只能檢視。</div>'; }
 
 function setGeneral(box) {
   var d = API.adminData(), get = function (k) { var r = d.settings.filter(function (x) { return x.key === k; })[0]; return r ? r.value : ''; };
-  var known = { '管理員': 1, '美術可見範圍': 1, '考核年度起始月': 1, '封存紀錄': 1 };
+  var known = { '管理員': 1, '美術可見範圍': 1, '考核年度起始月': 1, '封存紀錄': 1, '提醒信模式': 1, '提醒間隔天數': 1 };
   var h = '<div class="card pad" style="max-width:720px"><div class="form" style="grid-template-columns:1fr">';
   h += '<label>管理員 Email<textarea class="field" id="sgAdmins" rows="3" placeholder="一行一個">' + esc(get('管理員').split(/[\s,，;；]+/).filter(Boolean).join('\n')) + '</textarea><span class="hint">這些人擁有全部權限。也可以在「人員」把某人的角色設成「管理員」。</span></label>';
   h += '<label>美術可以看到哪些工項<select class="field" id="sgScope" style="max-width:320px">' + [['全部', '全部專案'], ['參與的專案', '自己有工項的專案'], ['自己的工項', '只有自己的工項']].map(function (o) { return '<option value="' + o[0] + '"' + (get('美術可見範圍') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select><span class="hint">PM 和管理員一律看得到全部。</span></label>';
@@ -661,6 +661,47 @@ function setGeneral(box) {
   $$('[data-osave]', box).forEach(function (b) {
     b.addEventListener('click', function () { var r = others[+b.dataset.osave]; busy(true); call('saveSetting', r.key, $('[data-ok="' + b.dataset.osave + '"]', box).value).then(function () { busy(false); adminRefresh(); toast('已儲存'); }).catch(fail); });
   });
+}
+
+/* ---------------- 提醒通知 ---------------- */
+function staleWarn(t) { return (t.warns || []).filter(function (w) { return /^(逾期未回報|可能已開始未回報)/.test(w); })[0] || ''; }
+function setRemind(box) {
+  var d = API.adminData(), get = function (k, def) { var r = d.settings.filter(function (x) { return x.key === k; })[0]; return r && r.value !== '' ? r.value : def; };
+  var mode = get('提醒信模式', '只預覽'), gap = get('提醒間隔天數', '3');
+  var by = {};
+  S.data.tasks.forEach(function (t) { var w = staleWarn(t); if (w && t.owner) (by[t.owner] = by[t.owner] || []).push({ t: t, w: w }); });
+  var names = Object.keys(by).sort(function (a, b) { return by[b].length - by[a].length || a.localeCompare(b, 'zh-Hant'); });
+  var h = '<div class="card pad" style="max-width:900px"><b style="font-size:15px">逾期未回報提醒</b>' +
+    '<div class="hint" style="margin:6px 0 12px;line-height:1.7">每個工作天早上 8 點多，系統會檢查兩種情況，只寄給有這些工項的人，沒有逾期的人不會收到：<br>' +
+    '・<b>逾期未回報</b>：進行中的工項過了原訂完成日一個工作天以上，之後都沒有更新過。<br>' +
+    '・<b>可能已開始未回報</b>：前置都完成兩個工作天以上（或過了預定開始日），本人手上也沒有進行中的工作，卻還沒按開始。<br>' +
+    '同一批工項最多每 N 天提醒一次；有新的逾期工項時會提早提醒。信由 GitHub 每日排程透過公司 Gmail 寄出，不需要伺服器，也不會產生費用。</div>' +
+    '<div class="form" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"><label>提醒信模式<select class="field" id="rmMode">' +
+    [['關閉', '關閉：不檢查'], ['只預覽', '只預覽：記錄本來會寄給誰，不寄信'], ['寄出', '寄出：真的寄信']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === mode ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
+    '</select></label><label>同一個人最少隔幾天提醒<input class="field" type="number" min="1" max="30" id="rmGap" value="' + esc(gap) + '"></label></div>' +
+    '<div class="mfoot" style="justify-content:flex-start"><button class="btn primary" id="rmSave">儲存</button><span class="hint">目前：<b>' + esc(mode) + '</b>' + (mode === '寄出' ? '' : '（不會寄任何信）') + '</span></div></div>';
+  h += '<div class="card pad" style="max-width:900px;margin-top:14px"><b style="font-size:15px">現在符合條件的人</b><span class="muted" style="margin-left:8px">' + names.length + ' 位、' + names.reduce(function (s, n) { return s + by[n].length; }, 0) + ' 個工項</span>' +
+    '<div class="hint" style="margin:4px 0 10px">依目前網站上的資料即時計算。這些工項也會在首頁「需要注意」和本人的「我的工作」標出來。</div>' +
+    (names.length ? '<table class="grid2"><thead><tr><th style="width:120px">人員</th><th>Email</th><th>工項</th></tr></thead><tbody>' + names.map(function (n) {
+      var p = S.data.people.filter(function (x) { return x.name === n; })[0] || {}, pe = (d.people.filter(function (x) { return x.name === n; })[0] || {}).email;
+      return '<tr><td>' + person(n) + '</td><td>' + (pe ? esc(pe) : '<span class="wtag w">沒有 Email，收不到</span>') + '</td><td>' + by[n].map(function (x) { return '<div style="margin:2px 0"><a href="javascript:void 0" data-rt="' + esc(x.t.id) + '">' + esc(x.t.title) + '</a> <span class="faint">' + esc(projName(x.t.project)) + '</span><br><span class="wtag w">' + esc(x.w) + '</span></div>'; }).join('') + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<div class="list empty">目前沒有逾期未回報的工項。</div>') + '</div>';
+  h += '<div class="card pad" style="max-width:900px;margin-top:14px"><b style="font-size:15px">最近的提醒紀錄</b><div id="rmLog" class="muted" style="margin-top:8px">讀取中…</div></div>';
+  box.innerHTML = h;
+  $$('[data-rt]', box).forEach(function (a) { a.addEventListener('click', function () { openTask(a.dataset.rt); }); });
+  $('#rmSave').addEventListener('click', function () {
+    var m = $('#rmMode').value, g = String(Math.max(1, Math.min(30, parseInt($('#rmGap').value, 10) || 3)));
+    if (m === '寄出' && mode !== '寄出' && !confirm('改成「寄出」後，下一個工作天早上就會真的寄信給符合條件的人。確定嗎？\n（還需要先在 GitHub 設定寄信帳號，沒設定時不會寄）')) return;
+    busy(true);
+    call('saveSetting', '提醒信模式', m).then(function () { return call('saveSetting', '提醒間隔天數', g); })
+      .then(function () { busy(false); adminRefresh(); toast('已儲存'); setRemind(box); }).catch(fail);
+  });
+  API.getReminderLog(60).then(function (rows) {
+    var el = $('#rmLog'); if (!el) return;
+    el.innerHTML = rows.length ? '<table class="grid2"><thead><tr><th style="width:140px">時間</th><th style="width:100px">人員</th><th>工項</th><th style="width:220px">結果</th></tr></thead><tbody>' + rows.map(function (r) {
+      return '<tr><td>' + esc(r.atText) + '</td><td>' + esc(r.person) + '</td><td class="faint">' + esc(r.tasks.split(',').join('、')) + '</td><td>' + (r.sent ? '<span class="wtag ok">已寄出</span>' : '<span class="faint">' + esc(r.note) + '</span>') + '</td></tr>';
+    }).join('') + '</tbody></table>' : '還沒有紀錄。每日排程跑過之後，這裡會列出寄出（或只預覽時本來會寄）的對象。';
+  }).catch(function (e) { var el = $('#rmLog'); if (el) el.textContent = (e && e.message) || String(e); });
 }
 
 /* ---------------- 年度封存 ---------------- */

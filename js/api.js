@@ -771,6 +771,12 @@ var API = (function () {
     return sb.rpc('admin_import', { payload: payload }).then(chk).then(function (r) { return loadAll().then(function () { return r; }); }).catch(function (e) { throw err(e); });
   }
 
+  function getReminderLog(limit) {
+    return sb.from('reminder_log').select('*').order('at', { ascending: false }).limit(limit || 100).then(chk)
+      .then(function (rows) { return rows.map(function (r) { r.atText = new Date(new Date(r.at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' '); return r; }); })
+      .catch(function (e) { throw err(e); });
+  }
+
   /* ---------------- 考核年度與封存 ---------------- */
   function archiveRecs() {
     try { var v = JSON.parse(cache.settings['封存紀錄'] || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
@@ -858,7 +864,7 @@ var API = (function () {
     saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
     adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
     saveDay: saveDay, saveDays: saveDays, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
-    setManagedProjects: setManagedProjects, periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
+    getReminderLog: getReminderLog, setManagedProjects: setManagedProjects, periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
     me: function () { return me; }
   };
 })();

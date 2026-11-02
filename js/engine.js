@@ -175,6 +175,7 @@ var Engine = (function () {
         }
         finish(t, res);
         R[t.id].expect = Math.round(expect);
+        R[t.id].planEnd = plan.last;
         var notDone = t._preds.filter(function (p) { var s = all[p].status; return s !== '完成' && s !== '待驗收'; });
         if (notDone.length) R[t.id].warn.push('已開始，但前置還沒完成：' + notDone.join('、'));
         if (who) cursor[who] = Math.max(cursor[who] || 0, res.end);
@@ -291,6 +292,39 @@ var Engine = (function () {
       }
       if (r.idle > 0) r.info = '負責人在此之前空等 ' + r.idle + ' 個工作天（等前置）';
     });
+
+    // ---- 逾期未回報（提醒用）：r.stale = { kind, since, text } ----
+    var md = function (n) { var x = ds(n); return (+x.slice(5, 7)) + '/' + (+x.slice(8)); };
+    var touched = function (t) { return dn(String(t.updatedAt || '').slice(0, 10)); };
+    var busy = {}, firstReady = {};
+    list.forEach(function (t) { if (t.status === '進行中' && t.mode !== '平行' && t.owner) busy[t.owner] = 1; });
+    list.forEach(function (t) {
+      var r = R[t.id];
+      if (!t.owner) return;
+      if (t.status === '進行中' && r.planEnd !== undefined && r.planEnd !== null) {
+        var up = touched(t);
+        if (cal.workdaysBetween(r.planEnd + 1, today) >= 1 && (up === null || up <= r.planEnd)) {
+          r.stale = { kind: '未送驗收', since: ds(r.planEnd), text: '逾期未回報：原訂 ' + md(r.planEnd) + ' 完成，之後沒有更新' };
+          r.warn = r.warn.filter(function (w) { return w.indexOf('進度落後') !== 0; });
+          r.warn.unshift(r.stale.text);
+        }
+        return;
+      }
+      if (t.status !== '未開始' || (t.mode !== '平行' && busy[t.owner])) return;
+      var since = null, ok = true;
+      (t._preds || []).forEach(function (p) {
+        var pt = all[p], e = pt && dn(pt.aend);
+        if (!pt || (pt.status !== '完成' && pt.status !== '待驗收') || e === null) ok = false; else if (since === null || e > since) since = e;
+      });
+      var ea = dn(t.earliest);
+      if (ea !== null && (since === null || ea > since)) since = ea;
+      if (!ok || since === null || cal.workdaysBetween(since + 1, today) < 2) return;
+      var up2 = touched(t);
+      if (up2 !== null && up2 > since) return;
+      if (t.mode !== '平行') { var f = firstReady[t.owner]; if (f && R[f.id].startPos <= r.startPos) return; if (f) delete R[f.id].stale; firstReady[t.owner] = t; }
+      r.stale = { kind: '未開始', since: ds(since), text: '可能已開始未回報：' + ((t._preds || []).length ? '前置 ' + md(since) + ' 已完成' : '預定 ' + md(since) + ' 開始') + '，還沒按開始' };
+    });
+    list.forEach(function (t) { var r = R[t.id]; if (r.stale && r.stale.kind === '未開始') r.warn.unshift(r.stale.text); });
 
     return { result: R, succ: succ, cal: cal };
   }
