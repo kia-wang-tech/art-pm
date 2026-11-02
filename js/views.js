@@ -663,7 +663,7 @@ function setYears(box) {
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">每年從<select class="field" id="yM" style="width:90px">' +
     [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (m) { return '<option value="' + m + '"' + (m === ps.startMonth ? ' selected' : '') + '>' + m + ' 月</option>'; }).join('') +
     '</select>開始<button class="btn primary" id="ySave">儲存</button><span class="muted">' + (ps.current ? '本年度：' + esc(ps.current.label) + '（' + ps.current.from + ' ～ ' + ps.current.to + '）' : '') + '</span></div>' +
-    '<div class="hint" style="margin-top:6px">年度用結束的那一年命名，例如從 11 月開始時，「2026年度」= 2025/11/1 ～ 2026/10/31。改起始月只影響還沒封存的年度，已封存的年度會保留原本的起訖日。</div></div>';
+    '<div class="hint" style="margin-top:6px">年度用結束的那一年命名，例如從 11 月開始時，「2026年度」= 2025/11/1 ～ 2026/10/31。改起始月時，已封存的年度不變，下一個年度會接著上一次封存的結束日開始：例如上次封存到 10/31、改成 12 月開始，下一年度就是 11/1 ～ 隔年 11/30（13 個月）；反過來則是 12/1 ～ 隔年 10/31（11 個月）。</div></div>';
   var past = ps.list.filter(function (x) { return !x.archived && x.to < today; });
   var oldest = past.length ? past[past.length - 1].label : '';
   h += '<div class="card pad" style="max-width:960px;margin-top:14px"><b style="font-size:15px">各年度資料</b>' +
@@ -686,7 +686,8 @@ function setYears(box) {
         act = P.label === oldest ? '<button class="btn sm primary" data-yar="' + esc(P.label) + '"' + (done ? '' : ' disabled') + '>封存</button>' : '<span class="faint" style="font-size:12px">請先封存較早的年度</span>';
       }
     }
-    h += '<tr><td><b>' + esc(P.label) + '</b></td><td>' + P.from + ' ～ ' + P.to + '</td><td>' + st + '</td><td style="text-align:right">' + n + '</td><td style="white-space:nowrap;text-align:right">' + act + '</td></tr>';
+    var mons = (+P.to.slice(0, 4) - +P.from.slice(0, 4)) * 12 + (+P.to.slice(5, 7) - +P.from.slice(5, 7)) + 1;
+    h += '<tr><td><b>' + esc(P.label) + '</b></td><td>' + P.from + ' ～ ' + P.to + (mons !== 12 ? ' <span class="wtag w">' + mons + ' 個月</span>' : '') + '</td><td>' + st + '</td><td style="text-align:right">' + n + '</td><td style="white-space:nowrap;text-align:right">' + act + '</td></tr>';
   });
   h += '</tbody></table></div>';
   box.innerHTML = h;

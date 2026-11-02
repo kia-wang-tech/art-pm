@@ -756,24 +756,50 @@ var API = (function () {
   }
   function yearOf(day, m) { var y = +day.slice(0, 4), mo = +day.slice(5, 7); return m === 1 || mo < m ? y : y + 1; }
   /* 回傳 { startMonth, current, list:[{label, from, to, archived, current, count}] }，新的在前 */
+  /* 回傳 { startMonth, current, list:[{label, from, to, archived, current, count}] }，新的在前
+     規則：已封存的年度固定不動；最後一次封存之後的第一個年度「接續」上一次封存的結束日，
+     結束日照新的起始月計算。例如上次封存到 10/31、改成 12 月起算 → 下一年度 11/1 ～ 隔年 11/30（13 個月）；
+     上次封存到 11/30、改成 11 月起算 → 12/1 ～ 隔年 10/31（11 個月）。 */
   function periods() {
     var m = startMonth(), recs = archiveRecs().slice().sort(function (x, y) { return x.to < y.to ? -1 : 1; });
-    var lastTo = recs.length ? recs[recs.length - 1].to : '', t0 = today(), ys = {};
-    ys[yearOf(t0, m)] = 1;
+    var t0 = today(), days = [t0];
     cache.tasks.forEach(function (t) {
-      var r = cache.out && cache.out.result[t.id], e = t.aend || (r && r.end);
-      if (e) ys[yearOf(e, m)] = 1;
-      var st = t.astart || (r && r.start); if (st) ys[yearOf(st, m)] = 1;
+      var r = cache.out && cache.out.result[t.id];
+      var e = t.aend || (r && r.end), st = t.astart || (r && r.start);
+      if (e) days.push(e); if (st) days.push(st);
     });
+    var maxDay = days.reduce(function (a, b) { return b > a ? b : a; }, t0);
+    var minDay = days.reduce(function (a, b) { return b < a ? b : a; }, t0);
     var taken = {}; recs.forEach(function (r) { taken[r.label] = 1; });
     var list = [];
-    Object.keys(ys).map(Number).forEach(function (Y) {
-      var r = rangeOf(Y, m);
-      if (lastTo && r.from <= lastTo) r.from = Engine.ds(Engine.dn(lastTo) + 1);
-      if (r.from > r.to) return;
-      var label = Y + '年度'; if (taken[label]) label += '（續）';
-      list.push({ label: label, from: r.from, to: r.to, archived: false, current: r.from <= t0 && t0 <= r.to });
-    });
+    function add(Y, from, to) {
+      if (from > to) return;
+      var label = Y + '年度'; while (taken[label]) label += '（續）';
+      taken[label] = 1;
+      list.push({ label: label, from: from, to: to, archived: false, current: from <= t0 && t0 <= to });
+    }
+    function next(d) { return Engine.ds(Engine.dn(d) + 1); }
+    // 1) 已封存年度之間（例如解除封存中間某一年）的空檔、以及最早一次封存之前：照起始月切，只列有資料的
+    var bounds = [{ to: Engine.ds(Engine.dn(minDay) - 1) }].concat(recs);
+    for (var k = 0; k + 1 < bounds.length; k++) {
+      var gFrom = k === 0 ? minDay : next(bounds[k].to), gTo = Engine.ds(Engine.dn(bounds[k + 1].from) - 1);
+      if (gFrom > gTo) continue;
+      for (var Y = yearOf(gFrom, m); Y <= yearOf(gTo, m); Y++) {
+        var r = rangeOf(Y, m), f = k > 0 && r.from < gFrom ? gFrom : r.from, t = r.to > gTo ? gTo : r.to;
+        if (days.some(function (d) { return d >= f && d <= t; })) add(Y, f, t);
+      }
+    }
+    // 2) 最後一次封存之後：第一個年度接續封存結束日，之後照起始月
+    var from = recs.length ? next(recs[recs.length - 1].to) : minDay;
+    var Y = recs.length ? Number(recs[recs.length - 1].to.slice(0, 4)) + 1 : yearOf(from, m);
+    while (rangeOf(Y, m).to < from) Y++;
+    if (!recs.length) from = rangeOf(Y, m).from;
+    for (; ; Y++) {
+      var rr = rangeOf(Y, m);
+      add(Y, from, rr.to);
+      from = next(rr.to);
+      if (rr.to >= maxDay) break;
+    }
     recs.forEach(function (r) { list.push({ label: r.label, from: r.from, to: r.to, archived: true, count: r.count, at: r.at, by: r.by }); });
     list.sort(function (x, y) { return x.from < y.from ? 1 : -1; });
     return { startMonth: m, current: list.filter(function (x) { return x.current; })[0] || null, list: list };
