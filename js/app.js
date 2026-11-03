@@ -392,16 +392,22 @@ function renderHome(c) {
   else if (mgIds.length) h += '<div class="hint" style="margin:18px 0 -6px">首頁只列出你管理的專案：' + esc(mgIds.map(projName).join('、')) + '。</div>';
   h += '<div class="home2"><section>';
   h += '<div class="sec-h"><h3>需要注意</h3><span class="faint">' + issues.length + ' 項</span></div>';
-  h += issues.length ? '<div class="list">' + issues.slice(0, 50).map(listItem).join('') + '</div>' + (issues.length > 50 ? '<div class="hint" style="margin-top:6px">只列出前 50 項，其餘請到各專案的主表格勾選「只看有警示」。</div>' : '')
-    : '<div class="list empty"><b>目前沒有警示</b>所有工項都在出版日前、照基準進行。</div>';
+  h += issues.length ? homeList('issues', issues) : '<div class="list empty"><b>目前沒有警示</b>所有工項都在出版日前、照基準進行。</div>';
   var today = dn(d.today), wkEnd = today + 7;
   var due = pool.filter(function (t) { return t.status !== '完成' && t.status !== '取消' && t.end && dn(t.end) >= today && dn(t.end) <= wkEnd; }).sort(sortTasks);
   h += '</section><section><div class="sec-h"><h3>七天內預計完成</h3><span class="faint">' + due.length + ' 項</span></div>';
-  h += due.length ? '<div class="list">' + due.slice(0, 40).map(listItem).join('') + '</div>' : '<div class="list empty">七天內沒有預計完成的工項。</div>';
+  h += due.length ? homeList('due', due) : '<div class="list empty">七天內沒有預計完成的工項。</div>';
   h += '</section></div>';
   c.innerHTML = h;
   $$('.pcard', c).forEach(function (el) { el.addEventListener('click', function () { go('p/' + encodeURIComponent(el.dataset.p)); }); });
+  $$('[data-more]', c).forEach(function (b) { b.addEventListener('click', function () { S.homeAll = S.homeAll || {}; S.homeAll[b.dataset.more] = !S.homeAll[b.dataset.more]; render(); }); });
   $$('.li', c).forEach(function (el) { el.addEventListener('click', function () { openTask(el.dataset.id); }); });
+}
+/* 首頁列表：先列 15 項，其餘按「顯示全部」展開 */
+function homeList(key, list) {
+  var N = 15, all = S.homeAll && S.homeAll[key], show = all ? list : list.slice(0, N);
+  return '<div class="list">' + show.map(listItem).join('') + '</div>' +
+    (list.length > N ? '<button class="btn ghost" data-more="' + key + '" style="width:100%;margin-top:6px">' + (all ? '收起，只看前 ' + N + ' 項' : '顯示全部 ' + list.length + ' 項（還有 ' + (list.length - N) + ' 項）') + '</button>' : '');
 }
 function greet() { var h = new Date(Date.now() + 8 * 3600000).getUTCHours(); return h < 11 ? '早安' : h < 18 ? '午安' : '晚安'; }
 function listItem(t) {
