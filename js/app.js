@@ -364,7 +364,10 @@ function renderHome(c) {
   }
   // PM：有設定管理專案時，提醒列表只列這些專案的工項（沒設定的照舊看全部）
   var mgIds = d.me.role === 'PM' ? managedBy(me) : [];
-  if (mgIds.length) pool = d.tasks.filter(function (t) { return mgIds.indexOf(t.project) >= 0; });
+  if (mgIds.length) {
+    pool = d.tasks.filter(function (t) { return mgIds.indexOf(t.project) >= 0; });
+    act = act.filter(function (p) { return mgIds.indexOf(p.id) >= 0; });
+  }
   var h = '<div class="home-h"><h2>' + greet() + '，' + esc(d.me.name) + '</h2><span class="muted">今天是 ' + d.today.replace(/-/g, '/') + '（' + '日一二三四五六'[wk(dn(d.today))] + '）</span></div>';
   h += '<div class="cards">';
   act.forEach(function (p) {
@@ -386,7 +389,7 @@ function renderHome(c) {
   var order = function (t) { var w = t.warns.join(' '); return /循環/.test(w) ? 0 : /超過出版日/.test(w) ? 1 : /進度落後|未回報/.test(w) ? 2 : /排序衝突/.test(w) ? 3 : 4; };
   issues.sort(function (a, b) { return order(a) - order(b) || (a.end || '').localeCompare(b.end || ''); });
   if (artist) h += '<div class="hint" style="margin:18px 0 -6px">下面只列出你的工項，以及你在等的、在等你完成的工項。</div>';
-  else if (mgIds.length) h += '<div class="hint" style="margin:18px 0 -6px">下面只列出你管理的專案：' + esc(mgIds.map(projName).join('、')) + '。</div>';
+  else if (mgIds.length) h += '<div class="hint" style="margin:18px 0 -6px">首頁只列出你管理的專案：' + esc(mgIds.map(projName).join('、')) + '。</div>';
   h += '<div class="home2"><section>';
   h += '<div class="sec-h"><h3>需要注意</h3><span class="faint">' + issues.length + ' 項</span></div>';
   h += issues.length ? '<div class="list">' + issues.slice(0, 50).map(listItem).join('') + '</div>' + (issues.length > 50 ? '<div class="hint" style="margin-top:6px">只列出前 50 項，其餘請到各專案的主表格勾選「只看有警示」。</div>' : '')
