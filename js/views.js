@@ -17,21 +17,22 @@ function renderMine(c) {
   var waiting = mine.filter(function (t) { return (t.status === '未開始' || t.status === '暫停') && !predsDone(t); });
   var review = mine.filter(function (t) { return t.status === '待驗收'; });
   var dueWeek = mine.filter(function (t) { return t.status !== '待驗收' && t.end && dn(t.end) <= today + 7; }).length;
+  // 電腦版照工作流向由左到右；手機版（上下排列）用 CSS 把「進行中」排最上面
   var lanes = [
-    ['進行中', doing, ST_HEX['進行中'], '現在沒有進行中的工作，可以從「可以開始」挑一項。'],
-    ['可以開始', ready, ST_HEX['未開始'], '前置都完成、排到你的工作會出現在這裡。'],
-    ['等待前置', waiting, '#a25ddc', '沒有在等別人的工作。'],
-    ['已送驗收', review, ST_HEX['待驗收'], 'PM 確認後會標成完成。']
+    ['等待前置', waiting, '#a25ddc', '沒有在等別人的工作。', 'm3'],
+    ['可以開始', ready, ST_HEX['未開始'], '前置都完成、排到你的工作會出現在這裡。', 'm2'],
+    ['進行中', doing, ST_HEX['進行中'], '現在沒有進行中的工作，可以從「可以開始」挑一項。', 'm1'],
+    ['已送驗收', review, ST_HEX['待驗收'], 'PM 確認後會標成完成。', 'm4']
   ];
   var pmReview = isPM() && self ? d.tasks.filter(isMyReview) : [];
-  if (pmReview.length) lanes.unshift(['等你驗收', pmReview, ST_HEX['完成'], '']);
+  if (pmReview.length) lanes.unshift(['等你驗收', pmReview, ST_HEX['完成'], '', 'm0']);
   var h = '<div class="mine-h"><div class="stats">' +
     '<div class="stat"><b>' + doing.length + '</b><span>進行中</span></div><div class="stat"><b>' + ready.length + '</b><span>可以開始</span></div>' +
     '<div class="stat"><b>' + waiting.length + '</b><span>等待前置</span></div><div class="stat"><b' + (dueWeek ? ' style="color:var(--warn)"' : '') + '>' + dueWeek + '</b><span>七天內要完成</span></div>' +
     (pmReview.length ? '<div class="stat"><b style="color:var(--accent)">' + pmReview.length + '</b><span>等你驗收</span></div>' : '') + '</div></div>';
   h += '<div class="lanes">';
   lanes.forEach(function (L) {
-    h += '<div class="lane"><h3><span class="bar" style="background:' + L[2] + '"></span>' + L[0] + '<span class="c">' + L[1].length + '</span>' +
+    h += '<div class="lane ' + L[4] + (L[1].length ? '' : ' nil') + '"><h3><span class="bar" style="background:' + L[2] + '"></span>' + L[0] + '<span class="c">' + L[1].length + '</span>' +
       (L[0] === '等你驗收' && L[1].length > 1 ? '<button class="btn sm" id="confirmAll" style="margin-left:auto">全部確認完成</button>' : '') + '</h3>';
     if (!L[1].length) h += '<div class="card empty" style="padding:18px;font-size:13px">' + L[3] + '</div>';
     L[1].slice(0, 60).forEach(function (t) { h += mineCard(t, L[0]); });

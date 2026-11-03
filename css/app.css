@@ -306,7 +306,14 @@ svg.arrows path.tmp { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4;
 .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; min-width: 120px; }
 .stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
 .stat span { font-size: 12px; color: var(--ink2); }
-.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; align-items: start; }
+.lanes { display: flex; gap: 16px; align-items: flex-start; }
+.lane { flex: 1 1 0; min-width: 0; }
+.lane.nil { flex: 0 0 210px; }
+@media (max-width: 900px) {
+  .lanes { flex-direction: column; align-items: stretch; }
+  .lane, .lane.nil { flex: none; width: 100%; }
+  .lane.m0 { order: 0; } .lane.m1 { order: 1; } .lane.m2 { order: 2; } .lane.m3 { order: 3; } .lane.m4 { order: 4; }
+}
 .lane h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 14px; }
 .lane h3 .bar { width: 4px; height: 16px; border-radius: 2px; }
 .lane h3 .c { color: var(--ink3); font-weight: 500; }
