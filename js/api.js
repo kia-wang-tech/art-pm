@@ -193,11 +193,61 @@ var API = (function () {
       }).catch(function (e) { console.error(e); });
     }, 400);
   }
+  /* ---------------- 同步別人的修改 ----------------
+     1. 即時推送（Supabase Realtime）：工項的變動直接帶資料；其他資料表透過 sync_clock 通知。
+     2. 保險輪詢：只讀 sync_clock 這張小表（約 1KB），有變動才去抓資料。
+        即時推送正常時每 2 分鐘檢查一次；斷線時每 20 秒；切回分頁、網路恢復時立刻檢查。 */
+  var clock = null, rtOk = false, lastCheck = 0, checking = false, selfBusy = 0, checkTimer = null;
+  function readClock() {
+    return sb.from('sync_clock').select('tbl,at').then(function (res) {
+      if (res.error) throw res.error;
+      var m = {}; res.data.forEach(function (r) { m[r.tbl] = r.at; }); return m;
+    });
+  }
+  function resetClock() { return readClock().then(function (m) { clock = m; }).catch(function () {}); }
+  /* 自己的寫入：完成後把基準更新成最新，避免把自己的修改當成別人的而整份重讀 */
+  function mine(fn) {
+    return function () {
+      selfBusy++;
+      var done = function () { return resetClock().then(function () { selfBusy--; }); };
+      return Promise.resolve(fn.apply(null, arguments)).then(function (r) { return done().then(function () { return r; }); },
+        function (e) { return done().then(function () { throw e; }); });
+    };
+  }
+  function pullTasks() {
+    if (!lastSync) return Promise.resolve();
+    return sb.from('tasks').select('*').gt('updated_at', lastSync).then(function (res) {
+      if (res.error || !res.data.length) return;
+      res.data.forEach(function (r) {
+        var t = fromDb(r), cur = cache.byId[t.id];
+        if (t.archived) { if (cur) { dropTask(t.id); pending.removed[t.id] = 1; } }
+        else if (!cur || cur.version < t.version) { putTask(t); pending.tasks[t.id] = 1; }
+        if (r.updated_at > lastSync) lastSync = r.updated_at;
+      });
+      notify();
+    });
+  }
+  function checkNow() {
+    if (checking || selfBusy || !clock) { scheduleCheck(1500); return; }
+    checking = true; lastCheck = Date.now();
+    readClock().then(function (m) {
+      var reload = false, tasks = false;
+      Object.keys(m).forEach(function (k) {
+        if (m[k] === clock[k]) return;
+        if (k === 'tasks') tasks = true; else reload = true;
+      });
+      clock = m;
+      if (reload) { pending.reload = true; notify(); }
+      else if (tasks) return pullTasks();
+    }).catch(function (e) { console.warn('同步檢查失敗', e); }).then(function () { checking = false; });
+  }
+  function scheduleCheck(ms) { clearTimeout(checkTimer); checkTimer = setTimeout(checkNow, ms || 800); }
   function startSync() {
+    resetClock();
     try {
       sb.channel('pm-sync')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, function (msg) {
-          if (msg.eventType === 'DELETE') { var id = msg.old && msg.old.id; if (id) { dropTask(id); pending.removed[id] = 1; } }
+          if (msg.eventType === 'DELETE') { var id = msg.old && msg.old.id; if (id && cache.byId[id]) { dropTask(id); pending.removed[id] = 1; } }
           else {
             var t = fromDb(msg.new), cur = cache.byId[t.id];
             if (t.archived) { if (cur) { dropTask(t.id); pending.removed[t.id] = 1; } }
@@ -206,25 +256,22 @@ var API = (function () {
           }
           notify();
         })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, function () { pending.reload = true; notify(); })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'leaves' }, function () { pending.reload = true; notify(); })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'people' }, function () { pending.reload = true; notify(); })
-        .subscribe();
-    } catch (e) { console.warn('即時同步無法啟動', e); }
-    // 保險：每分鐘抓一次別人改過的工項（即時同步斷線時也不會漏）
-    setInterval(function () {
-      if (document.hidden || !lastSync) return;
-      sb.from('tasks').select('*').gt('updated_at', lastSync).then(function (res) {
-        if (res.error || !res.data.length) return;
-        res.data.forEach(function (r) {
-          var t = fromDb(r), cur = cache.byId[t.id];
-          if (t.archived) { if (cur) { dropTask(t.id); pending.removed[t.id] = 1; } }
-          else if (!cur || cur.version < t.version) { putTask(t); pending.tasks[t.id] = 1; }
-          if (r.updated_at > lastSync) lastSync = r.updated_at;
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sync_clock' }, function (msg) {
+          var k = msg.new && msg.new.tbl;
+          if (k && k !== 'tasks' && k !== 'tasks:del') scheduleCheck(1200);
+        })
+        .subscribe(function (status) {
+          var was = rtOk; rtOk = status === 'SUBSCRIBED';
+          if (rtOk && !was) scheduleCheck(500);   // 重新連上：補抓斷線期間的變動
         });
-        notify();
-      });
-    }, C.pollMs || 60000);
+    } catch (e) { console.warn('即時同步無法啟動', e); }
+    var poll = C.pollMs || 20000;
+    setInterval(function () {
+      if (document.hidden) return;
+      if (Date.now() - lastCheck >= (rtOk ? Math.max(poll, 120000) : poll)) checkNow();
+    }, 5000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden && Date.now() - lastCheck > 5000) checkNow(); });
+    window.addEventListener('online', function () { scheduleCheck(500); });
   }
   function onChange(fn) { listeners.push(fn); }
 
@@ -859,12 +906,12 @@ var API = (function () {
   return {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
-    saveTask: saveTask, setStatus: setStatus, previewTask: previewTask, deleteTask: deleteTask, reorderQueue: reorderQueue,
-    applyTemplate: applyTemplate, bulkAdd: bulkAdd, bulkStatus: bulkStatus, saveProject: saveProject, resetBaseline: resetBaseline,
-    saveLeave: saveLeave, exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: importPayload,
-    adminData: adminData, refresh: refresh, saveSetting: saveSetting, savePerson: savePerson, deletePerson: deletePerson,
-    saveDay: saveDay, saveDays: saveDays, deleteDay: deleteDay, saveTemplate: saveTemplate, deleteTemplate: deleteTemplate, deleteLeave: deleteLeave,
-    getReminderLog: getReminderLog, setManagedProjects: setManagedProjects, periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: archivePeriod, unarchivePeriod: unarchivePeriod,
+    saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), resetBaseline: mine(resetBaseline),
+    saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
+    adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
+    saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
+    getReminderLog: getReminderLog, setManagedProjects: mine(setManagedProjects), periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: mine(archivePeriod), unarchivePeriod: mine(unarchivePeriod),
     me: function () { return me; }
   };
 })();

@@ -1155,13 +1155,20 @@ function setLog(box) {
 /* ---------------- 其他人修改時自動更新 ---------------- */
 API.onChange(function (ev) {
   if (!S.data) return;
-  if (ev.reload || S.preview) { if (!isEditing()) load(S.data.history); return; }
+  if (ev.reload || S.preview) { S.needReload = true; flushSync(); return; }
   ev.removed.forEach(function (id) { S.data.tasks = S.data.tasks.filter(function (t) { return t.id !== id; }); });
   ev.tasks.forEach(upsert);
   index(); applyComputed(ev.computed);
-  if (syncCount || isEditing()) return;
-  render();
+  S.needRender = true; flushSync();
 });
+/* 別人的修改：正在編輯時先記著，編輯結束（關掉面板、離開欄位）後再更新畫面 */
+function flushSync() {
+  if (syncCount || isEditing()) return;
+  if (S.needReload) { S.needReload = S.needRender = false; refreshData(); return; }
+  if (S.needRender) { S.needRender = false; render(); }
+}
+setInterval(flushSync, 1000);
+document.addEventListener('focusout', function () { setTimeout(flushSync, 50); });
 
 /* ---------------- 啟動 ---------------- */
 function gate(html) {

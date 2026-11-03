@@ -177,7 +177,22 @@ function saveLater(id, patch, fn, okMsg) {
 function patchTask(id, patch, okMsg) {
   saveLater(id, patch, function (cur) { var o = Object.assign({ id: cur.id, at: cur.at }, patch); return call('saveTask', o); }, okMsg);
 }
-function isEditing() { return $('#drawer') && $('#drawer').classList.contains('open') || !!$('.modal') || !!$('.pop') || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.closest('.drawer')); }
+function isEditing() {
+  var a = document.activeElement;
+  if ($('#drawer') && $('#drawer').classList.contains('open') || $('.modal') || $('.pop')) return true;
+  if (!a || !/INPUT|TEXTAREA|SELECT/.test(a.tagName)) return false;
+  // 篩選列的搜尋框、下拉選單不算編輯：重畫後會把游標放回原位
+  if (a.id && a.closest('.toolbar') && (a.type === 'search' || a.tagName === 'SELECT')) return false;
+  return true;
+}
+/* 背景重新讀取資料（別人改了專案、人員、行事曆等）：不顯示轉圈，畫面一次換掉 */
+function refreshData() {
+  return call('getData', { history: true }).then(function (d) {
+    S.realData = d;
+    S.data = S.preview ? previewData(d, S.preview) : d; index();
+    render();
+  }).catch(function (e) { console.warn('背景更新失敗', e); });
+}
 
 /* ---------------- 路由 ---------------- */
 function parseRoute() {
@@ -307,6 +322,14 @@ function setViews(html) { var v = $('#views'); v.innerHTML = html || ''; v.class
 
 function render() {
   if (!S.data) return;
+  var ct = $('#content'), sameView = S._lastHash === location.hash, st = ct ? ct.scrollTop : 0;
+  S._lastHash = location.hash;
+  var fa = document.activeElement, keep = fa && fa.id && fa.closest && fa.closest('.toolbar') ? { id: fa.id, s: fa.selectionStart, e: fa.selectionEnd } : null;
+  renderInner();
+  if (sameView && ct && st && ct.scrollTop !== st) ct.scrollTop = st;
+  if (keep) { var n = document.getElementById(keep.id); if (n && n !== document.activeElement) { n.focus(); try { if (keep.s !== null && keep.s !== undefined) n.setSelectionRange(keep.s, keep.e); } catch (x) {} } }
+}
+function renderInner() {
   S.route = parseRoute();
   renderNav();
   var c = $('#content');
