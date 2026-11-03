@@ -594,7 +594,21 @@ function bindBoard(c, p) {
     $('td.title', tr).addEventListener('click', function () { openTask(id); });
     $$('td.cell:not(.ro)', tr).forEach(function (td) { td.addEventListener('click', function (e) { e.stopPropagation(); editCell(td, byId[id], td.dataset.ed); }); });
   });
-  $$('[data-pick]', c).forEach(function (cb) { cb.addEventListener('click', function (e) { e.stopPropagation(); S.picked[cb.dataset.pick] = cb.checked; if (!cb.checked) delete S.picked[cb.dataset.pick]; cb.closest('tr').classList.toggle('sel', cb.checked); renderBulkBar(); }); });
+  // 勾選：按住 Shift 點第二個，會把兩個之間（畫面上看得到的）工項一起勾選或取消
+  var picks = $$('[data-pick]', c);
+  var setPick = function (x, on) { x.checked = on; if (on) S.picked[x.dataset.pick] = true; else delete S.picked[x.dataset.pick]; x.closest('tr').classList.toggle('sel', on); };
+  picks.forEach(function (cb, i) {
+    cb.addEventListener('mousedown', function (e) { if (e.shiftKey) e.preventDefault(); });   // 避免 Shift 點擊時選到一整段文字
+    cb.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var j = S.lastPick ? picks.findIndex(function (x) { return x.dataset.pick === S.lastPick; }) : -1;
+      if (e.shiftKey && j >= 0 && j !== i) {
+        for (var k = Math.min(i, j); k <= Math.max(i, j); k++) setPick(picks[k], cb.checked);
+      } else setPick(cb, cb.checked);
+      S.lastPick = cb.dataset.pick;
+      renderBulkBar();
+    });
+  });
   $$('[data-gpick]', c).forEach(function (cb) {
     cb.addEventListener('click', function () {
       var g = cb.dataset.gpick;
