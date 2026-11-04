@@ -73,6 +73,7 @@ var API = (function () {
     cache.calendar.forEach(function (c) { if (c.type === '補班') mk[c.day] = 1; else hol[c.day] = c.name || '假日'; });
     return {
       tasks: tasks, holidays: hol, makeup: mk, today: today(), lenientPreds: true,
+      staff: cache.people.filter(function (p) { return p.active; }).map(function (p) { return p.name; }),
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days }; })
     };
   }
@@ -115,8 +116,10 @@ var API = (function () {
   function loadAll() {
     return Promise.all([
       fetchAll('tasks', 'id', function (q) { return q.is('archived', null); }), fetchAll('projects', 'id'), fetchAll('people', 'name'), fetchAll('calendar', 'day'),
-      fetchAll('leaves', 'id'), fetchAll('templates', 'id'), fetchAll('settings', 'key')
+      fetchAll('leaves', 'id'), fetchAll('templates', 'id'), fetchAll('settings', 'key'),
+      fetchAll('vendors', 'name').catch(function () { return []; }), fetchAll('tag_colors', 'name').catch(function () { return []; })
     ]).then(function (r) {
+      cache.vendors = r[7]; cache.tagColors = {}; r[8].forEach(function (x) { cache.tagColors[x.name] = x.color; });
       cache.tasks = r[0].map(fromDb); cache.byId = {};
       cache.tasks.forEach(function (t) { cache.byId[t.id] = t; });
       cache.projects = r[1]; cache.people = r[2]; cache.calendar = r[3]; cache.leaves = r[4]; cache.templates = r[5];
@@ -144,6 +147,8 @@ var API = (function () {
       projects: cache.projects.map(clientProject),
       people: cache.people.filter(function (p) { return p.active; }).map(function (p) { return { name: p.name, role: p.role, alias: p.alias, email: me.role === '管理員' ? p.email : undefined }; }),
       tasks: tasks,
+      vendors: (cache.vendors || []).map(function (v) { return { name: v.name, type: v.type, alias: v.alias, active: v.active }; }),
+      tagColors: Object.assign({}, cache.tagColors || {}),
       templates: Object.keys(tpl).map(function (k) { return { name: k, steps: tpl[k].sort(function (a, b) { return a.step - b.step; }) }; }),
       holidays: hol, makeup: mk,
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days, type: l.type, note: l.note }; }),
@@ -277,7 +282,9 @@ var API = (function () {
 
   /* ---------------- 寫入：工項 ---------------- */
   function afterWrite(rows, extra) {
-    rows.forEach(function (r) { var t = fromDb(r); putTask(t); if (r.updated_at > lastSync) lastSync = r.updated_at; });
+    var tags = {};
+    rows.forEach(function (r) { var t = fromDb(r); putTask(t); if (r.updated_at > lastSync) lastSync = r.updated_at; String(r.tag || '').split(/\s*[,，、;；]\s*/).forEach(function (x) { x = x.trim(); if (x && cache.tagColors && cache.tagColors[x] === undefined) tags[x] = 1; }); });
+    if (Object.keys(tags).length && me && (me.role === '管理員' || me.role === 'PM')) mine(ensureTags)(Object.keys(tags));
     compute();
     var o = { computed: computedMap() };
     Object.keys(extra || {}).forEach(function (k) { o[k] = extra[k]; });
@@ -527,6 +534,9 @@ var API = (function () {
       calendar: cache.calendar.slice().sort(function (a, b) { return a.day < b.day ? -1 : 1; }),
       templates: cache.templates.slice().sort(function (a, b) { return a.tpl === b.tpl ? a.step - b.step : (a.tpl < b.tpl ? -1 : 1); }),
       leaves: cache.leaves.slice().sort(function (a, b) { return a.start_date < b.start_date ? 1 : -1; }),
+      vendors: (cache.vendors || []).map(function (v) { return { name: v.name, email: v.email || '', type: v.type || '', alias: v.alias || '', active: v.active, note: v.note || '' }; })
+        .sort(function (a, b) { return (b.active - a.active) || a.name.localeCompare(b.name, 'zh-Hant'); }),
+      vendorUsage: (function () { var u = {}; cache.tasks.forEach(function (t) { Engine.splitNames(t.helper).forEach(function (n) { u[n] = (u[n] || 0) + 1; }); }); return u; })(),
       usage: (function () { var u = {}; cache.tasks.forEach(function (t) { if (t.owner) u[t.owner] = (u[t.owner] || 0) + 1; }); return u; })()
     };
   }
@@ -739,6 +749,7 @@ var API = (function () {
       done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註', icon: '圖示' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
+    vendors: ['外包', { name: '名稱', email: 'Email', type: '類型', alias: '別名', active: '合作', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
     leaves: ['休假', { person: '人員', start_date: '開始日', end_date: '結束日', days: '天數', type: '類型', note: '說明' }],
     templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式' }],
@@ -758,7 +769,7 @@ var API = (function () {
     var out = {}, warn = [];
     Object.keys(SHEETS).forEach(function (key) {
       var name = SHEETS[key][0], map = SHEETS[key][1], ws = wb.Sheets[name];
-      if (!ws) { if (key !== 'settings') throw new Error('找不到「' + name + '」分頁。'); return; }
+      if (!ws) { if (key !== 'settings' && key !== 'vendors') throw new Error('找不到「' + name + '」分頁。'); return; }
       var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
       var head = (rows[0] || []).map(function (h) { return String(h).trim(); });
       var idx = {};
@@ -803,6 +814,10 @@ var API = (function () {
     out.calendar = out.calendar.filter(function (c) { return c.day; }).map(function (c) { c.type = c.type === '補班' ? '補班' : '假日'; return c; });
     out.leaves = out.leaves.filter(function (l) { return l.person && l.start_date; }).map(function (l) { l.end_date = l.end_date || l.start_date; l.type = l.type || '排休'; l.note = l.note || ''; return l; });
     out.templates = out.templates.filter(function (s) { return s.tpl && s.title; }).map(function (s) { s.grp = s.grp || ''; s.preds = String(s.preds || ''); s.mode = s.mode || '排隊'; s.days = s.days || 1; return s; });
+    if (out.vendors) out.vendors = out.vendors.filter(function (v) { return v.name; }).map(function (v) {
+      v.email = (v.email || '').toLowerCase(); v.type = v.type === '廠商' || v.type === '個人' ? v.type : ''; v.alias = v.alias || ''; v.note = v.note || '';
+      v.active = !(v.active === '否' || v.active === 'false' || v.active === 'FALSE'); return v;
+    });
     if (out.settings) out.settings = out.settings.filter(function (s) { return s.key && s.key !== '個人排程輸出試算表ID' && s.key !== '今天'; }).map(function (s) { s.value = s.value || ''; s.note = s.note || ''; return s; });
     // 檢查：工項的專案存在、負責人在名單上
     var pids = {}, names = {};
@@ -817,6 +832,44 @@ var API = (function () {
   }
   function importPayload(payload) {
     return sb.rpc('admin_import', { payload: payload }).then(chk).then(function (r) { return loadAll().then(function () { return r; }); }).catch(function (e) { throw err(e); });
+  }
+
+  /* ---------------- 外包 ---------------- */
+  function saveVendor(origName, o) {
+    var row = { email: (o.email || '').trim().toLowerCase(), type: o.type || '', alias: (o.alias || '').trim(), active: o.active !== false, note: (o.note || '').trim() };
+    if (row.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(row.email)) return Promise.reject(new Error('Email 格式不正確。'));
+    var q;
+    if (origName) q = sb.from('vendors').update(row).eq('name', origName).select();
+    else {
+      row.name = String(o.name || '').trim();
+      if (!row.name) return Promise.reject(new Error('請填名稱。'));
+      if (cache.people.some(function (p) { return p.name === row.name; })) return Promise.reject(new Error('「' + row.name + '」已經是內部人員的名字。'));
+      q = sb.from('vendors').insert(row).select();
+    }
+    return q.then(function (res) {
+      var v = chk(res)[0]; if (!v) throw new Error('你沒有修改外包的權限。');
+      cache.vendors = (cache.vendors || []).filter(function (x) { return x.name !== v.name; }).concat([v]);
+      return v;
+    }).catch(function (e) { if (e && e.code === '23505') throw new Error('已經有同名的外包。'); throw err(e); });
+  }
+  function deleteVendor(name) {
+    return sb.from('vendors').delete().eq('name', name).select('name').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除外包的權限。');
+      cache.vendors = (cache.vendors || []).filter(function (x) { return x.name !== name; });
+    }).catch(function (e) { throw err(e); });
+  }
+  /* 新標籤：隨機給一個目前用得最少的色號 */
+  function ensureTags(names) {
+    var news = (names || []).filter(function (n) { return n && cache.tagColors[n] === undefined; });
+    if (!news.length) return Promise.resolve();
+    var use = []; for (var i = 0; i < 12; i++) use[i] = 0;
+    Object.keys(cache.tagColors).forEach(function (k) { use[cache.tagColors[k]]++; });
+    var rows = news.map(function (n) {
+      var min = Math.min.apply(null, use), pool = []; use.forEach(function (c, i) { if (c === min) pool.push(i); });
+      var c = pool[Math.floor(Math.random() * pool.length)]; use[c]++; cache.tagColors[n] = c;
+      return { name: n, color: c };
+    });
+    return sb.from('tag_colors').upsert(rows, { onConflict: 'name', ignoreDuplicates: true }).then(function () {}, function () {});
   }
 
   function getReminderLog(limit) {
@@ -912,7 +965,7 @@ var API = (function () {
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
-    getReminderLog: getReminderLog, setManagedProjects: mine(setManagedProjects), periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: mine(archivePeriod), unarchivePeriod: mine(unarchivePeriod),
+    tagColors: function () { return cache.tagColors || {}; }, getReminderLog: getReminderLog, saveVendor: mine(saveVendor), deleteVendor: mine(deleteVendor), ensureTags: mine(ensureTags), setManagedProjects: mine(setManagedProjects), periods: periods, loadArchived: loadArchived, archivedCached: function (l) { return archCache[l] || null; }, archivePeriod: mine(archivePeriod), unarchivePeriod: mine(unarchivePeriod),
     me: function () { return me; }
   };
 })();

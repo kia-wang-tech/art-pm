@@ -93,6 +93,7 @@ var Engine = (function () {
     return n * sign;
   };
 
+  function splitNames(s) { return String(s || '').split(/\s*[,，、;；/]\s*/).map(function (x) { return x.trim(); }).filter(Boolean); }
   function num(v, def) { var n = Number(v); return (v === '' || v === null || v === undefined || isNaN(n)) ? def : n; }
 
   /**
@@ -105,6 +106,12 @@ var Engine = (function () {
     var all = {}, list = [];
     (input.tasks || []).forEach(function (t) { if (t && t.id) { all[t.id] = t; list.push(t); } });
 
+    // 協力：內部人員（input.staff 名單）會跟負責人一起被佔用時間；外包不影響排程
+    var staff = {}; (input.staff || []).forEach(function (n) { staff[n] = 1; });
+    var helpersOf = function (t) {
+      if (t.mode === '平行' || !t.owner) return [];
+      return splitNames(t.helper).filter(function (n) { return staff[n] && n !== t.owner; });
+    };
     var R = {};      // id → 結果
     var succ = {};   // id → [後續工項]
     list.forEach(function (t) {
@@ -176,6 +183,7 @@ var Engine = (function () {
         finish(t, res);
         R[t.id].expect = Math.round(expect);
         R[t.id].planEnd = plan.last;
+        helpersOf(t).forEach(function (h) { cursor[h] = Math.max(cursor[h] || 0, res.end); });
         var notDone = t._preds.filter(function (p) { var s = all[p].status; return s !== '完成' && s !== '待驗收'; });
         if (notDone.length) R[t.id].warn.push('已開始，但前置還沒完成：' + notDone.join('、'));
         if (who) cursor[who] = Math.max(cursor[who] || 0, res.end);
@@ -225,13 +233,19 @@ var Engine = (function () {
       if (t.mode === '平行' || !t.owner) {
         res = cal.advance(null, x, dur);
       } else {
-        var c = Math.max(cursor[t.owner] || today, today);
+        var c = Math.max(cursor[t.owner] || today, today), hs = helpersOf(t), hc = c;
+        hs.forEach(function (h) { hc = Math.max(hc, cursor[h] || today); });
         if (x > c + EPS) {
           var idle = cal.workdaysBetween(Math.floor(c + EPS), Math.floor(x + EPS));
           if (idle >= 1) R[t.id].idle = idle;
         }
-        res = cal.advance(t.owner, Math.max(x, c), dur);
+        if (hc > Math.max(x, c) + EPS) {
+          var wait = cal.workdaysBetween(Math.floor(Math.max(x, c) + EPS), Math.floor(hc + EPS));
+          if (wait >= 1) R[t.id].warn.push('等協力人員有空：晚 ' + wait + ' 個工作天開始');
+        }
+        res = cal.advance(t.owner, Math.max(x, c, hc), dur);
         cursor[t.owner] = res.end;
+        hs.forEach(function (h) { cursor[h] = Math.max(cursor[h] || 0, res.end); });
       }
       finish(t, res);
       if (t.status === '暫停') R[t.id].warn.push('暫停中（以目前排程估算）');
@@ -241,19 +255,23 @@ var Engine = (function () {
     var guard = 0;
     while (left > 0 && guard++ < 200000) {
       var progress = false;
-      Object.keys(queues).forEach(function (o) {
-        var q = queues[o];
-        while (head[o] < q.length) {
-          var t = q[head[o]];
-          if (done[t.id]) { head[o]++; continue; }
-          if (!predsReady(t)) break;
-          place(t); head[o]++; progress = true;
-        }
-      });
       for (var i = 0; i < parallel.length; i++) {
         var p = parallel[i];
         if (!done[p.id] && predsReady(p)) { place(p); progress = true; }
       }
+      // 各人排隊的第一項裡，挑最早能開始的先排（有協力人員時，大家的時間才會依先後佔用）
+      var best = null, bestPos = Infinity;
+      Object.keys(queues).forEach(function (o) {
+        var q = queues[o];
+        while (head[o] < q.length && done[q[head[o]].id]) head[o]++;
+        if (head[o] >= q.length) return;
+        var t = q[head[o]];
+        if (!predsReady(t)) return;
+        var pos = Math.max(readyPos(t), cursor[o] || today, today);
+        helpersOf(t).forEach(function (h) { pos = Math.max(pos, cursor[h] || today); });
+        if (pos < bestPos) { best = t; bestPos = pos; }
+      });
+      if (best) { place(best); continue; }
       if (progress) continue;
       // 卡住了：先找前置都排好、只是排隊順序在後面的工項
       var jumped = null;
@@ -376,18 +394,20 @@ var Engine = (function () {
       res[p] = m;
     });
     (input.tasks || []).forEach(function (t) {
-      if (!t.owner || !res[t.owner] || t.mode === '平行' || t.status === '取消') return;
+      if (!t.owner || t.mode === '平行' || t.status === '取消') return;
+      var who = [t.owner].concat(splitNames(t.helper).filter(function (n) { return n !== t.owner; })).filter(function (n) { return res[n]; });
+      if (!who.length) return;
       var r = out.result[t.id];
       (r.alloc || []).forEach(function (al) {
         if (al[0] < a || al[0] > b) return;
         var key = ds(al[0]).slice(0, 7);
-        res[t.owner][key].used += al[1];
+        who.forEach(function (n) { res[n][key].used += al[1]; });
       });
     });
     return res;
   }
 
-  return { schedule: schedule, wouldCycle: wouldCycle, monthlyLoad: monthlyLoad, dn: dn, ds: ds, splitIds: splitIds, Calendar: Calendar };
+  return { schedule: schedule, wouldCycle: wouldCycle, monthlyLoad: monthlyLoad, dn: dn, ds: ds, splitIds: splitIds, splitNames: splitNames, Calendar: Calendar };
 })();
 
 if (typeof module !== 'undefined') module.exports = Engine;

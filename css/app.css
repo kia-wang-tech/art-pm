@@ -491,3 +491,40 @@ input.field.bad { box-shadow: 0 0 0 2px var(--danger); }
   .side-mini .side-foot { flex-direction: column; padding: 10px 0; gap: 6px; }
 }
 @media (max-width: 860px) { .side-tg { display: none; } }
+
+/* ---------- 主表格：自訂欄位 ---------- */
+.tbl.cfg { table-layout: fixed; width: 100%; min-width: 980px; }
+.tbl.cfg td { width: auto; overflow: hidden; text-overflow: ellipsis; }
+.tbl.cfg td.title { min-width: 0; max-width: none; }
+.tbl.cfg td.title .tt { min-width: 0; }
+.tbl.cfg td.title .tt .n { min-width: 0; }
+.tbl th.cth { position: relative; cursor: grab; user-select: none; }
+.tbl th.cth.dropto { box-shadow: inset 3px 0 0 var(--accent); }
+.tbl th .rsz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
+.tbl th .rsz:hover, body.colresize .tbl th .rsz { background: var(--accent); opacity: .35; }
+body.colresize { cursor: col-resize; user-select: none; }
+.tbl td.tagcell { text-align: left; }
+.hlp { display: inline-block; margin-left: 4px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 0 6px; vertical-align: middle; }
+.htip { position: fixed; z-index: 95; max-width: 380px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--pop-shadow); padding: 10px 12px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; pointer-events: none; }
+.htip b { display: block; margin-bottom: 4px; }
+.htip .nt { margin-top: 6px; color: var(--ink2); font-size: 12px; }
+
+/* ---------- 標籤顏色（淺色／深色各一套） ---------- */
+.tagc { display: inline-flex; align-items: center; gap: 4px; border-radius: 10px; padding: 1px 8px; font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap; margin-right: 4px; background: var(--tg-bg); color: var(--tg-fg); }
+.tagc a { color: inherit; opacity: .6; text-decoration: none; }
+.tg0 { --tg-bg: #fde2e4; --tg-fg: #9b1c31; } .tg1 { --tg-bg: #ffe8cc; --tg-fg: #8a4b00; } .tg2 { --tg-bg: #fff3bf; --tg-fg: #6b5900; }
+.tg3 { --tg-bg: #d3f9d8; --tg-fg: #1b6b2f; } .tg4 { --tg-bg: #c3fae8; --tg-fg: #0b6655; } .tg5 { --tg-bg: #c5f6fa; --tg-fg: #0b5c6b; }
+.tg6 { --tg-bg: #d0ebff; --tg-fg: #154a85; } .tg7 { --tg-bg: #dbe4ff; --tg-fg: #2f3d9a; } .tg8 { --tg-bg: #e5dbff; --tg-fg: #5121a3; }
+.tg9 { --tg-bg: #f3d9fa; --tg-fg: #7a1f8f; } .tg10 { --tg-bg: #e9ecef; --tg-fg: #3d4651; } .tg11 { --tg-bg: #f4e6d4; --tg-fg: #6b4420; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tg0 { --tg-bg: #4a1f27; --tg-fg: #ffb3bf; } :root:not([data-theme="light"]) .tg1 { --tg-bg: #4a3016; --tg-fg: #ffc98a; } :root:not([data-theme="light"]) .tg2 { --tg-bg: #423a12; --tg-fg: #ffe066; }
+  :root:not([data-theme="light"]) .tg3 { --tg-bg: #1d3d25; --tg-fg: #8ce99a; } :root:not([data-theme="light"]) .tg4 { --tg-bg: #143d35; --tg-fg: #63e6be; } :root:not([data-theme="light"]) .tg5 { --tg-bg: #123b42; --tg-fg: #66d9e8; }
+  :root:not([data-theme="light"]) .tg6 { --tg-bg: #18334f; --tg-fg: #74c0fc; } :root:not([data-theme="light"]) .tg7 { --tg-bg: #232c56; --tg-fg: #91a7ff; } :root:not([data-theme="light"]) .tg8 { --tg-bg: #31245a; --tg-fg: #b197fc; }
+  :root:not([data-theme="light"]) .tg9 { --tg-bg: #3f1d47; --tg-fg: #e599f7; } :root:not([data-theme="light"]) .tg10 { --tg-bg: #343a40; --tg-fg: #ced4da; } :root:not([data-theme="light"]) .tg11 { --tg-bg: #3d2e1f; --tg-fg: #e0b98a; } }
+:root[data-theme="dark"] .tg0 { --tg-bg: #4a1f27; --tg-fg: #ffb3bf; } :root[data-theme="dark"] .tg1 { --tg-bg: #4a3016; --tg-fg: #ffc98a; } :root[data-theme="dark"] .tg2 { --tg-bg: #423a12; --tg-fg: #ffe066; }
+:root[data-theme="dark"] .tg3 { --tg-bg: #1d3d25; --tg-fg: #8ce99a; } :root[data-theme="dark"] .tg4 { --tg-bg: #143d35; --tg-fg: #63e6be; } :root[data-theme="dark"] .tg5 { --tg-bg: #123b42; --tg-fg: #66d9e8; }
+:root[data-theme="dark"] .tg6 { --tg-bg: #18334f; --tg-fg: #74c0fc; } :root[data-theme="dark"] .tg7 { --tg-bg: #232c56; --tg-fg: #91a7ff; } :root[data-theme="dark"] .tg8 { --tg-bg: #31245a; --tg-fg: #b197fc; }
+:root[data-theme="dark"] .tg9 { --tg-bg: #3f1d47; --tg-fg: #e599f7; } :root[data-theme="dark"] .tg10 { --tg-bg: #343a40; --tg-fg: #ced4da; } :root[data-theme="dark"] .tg11 { --tg-bg: #3d2e1f; --tg-fg: #e0b98a; }
+.tagwrap { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; min-height: 34px; background: var(--surface); }
+.tagwrap .tagin { border: 0; outline: none; background: transparent; flex: 1; min-width: 140px; font: inherit; color: inherit; }
+.list2 .tagc { pointer-events: none; }
+.gbar.help { opacity: .6; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.4) 0 4px, transparent 4px 8px); }
