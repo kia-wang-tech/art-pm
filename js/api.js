@@ -83,7 +83,7 @@ var API = (function () {
   }
   function decorate(t) {
     var r = cache.out && cache.out.result[t.id];
-    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; }
+    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; t.conflict = r.conflict || ''; }
     else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; t.expect = undefined; }
     return t;
   }
@@ -91,7 +91,7 @@ var API = (function () {
   function view(t) { return decorate(copyTask(t)); }
   function computedMap() {
     var m = {};
-    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect]; });
+    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect, r.conflict || '']; });
     return m;
   }
   function putTask(t) {
@@ -421,7 +421,7 @@ var API = (function () {
   function reorderQueue(owner, ids) {
     return sb.rpc('reorder_queue', { p_owner: owner, p_ids: ids }).then(function (res) {
       chk(res);
-      return sb.from('tasks').select('*').in('id', ids).then(function (r2) { return afterWrite(chk(r2)); });
+      return sb.from('tasks').select('*').in('id', ids).then(function (r2) { var rows = chk(r2), o = afterWrite(rows); o.tasks = rows.map(function (r) { return cache.byId[r.id] ? view(cache.byId[r.id]) : null; }).filter(Boolean); return o; });
     }).catch(function (e) { throw err(e); });
   }
 
@@ -476,7 +476,7 @@ var API = (function () {
     return sb.rpc('set_baselines', { items: items }).then(function (res) {
       var n = chk(res);
       return sb.from('tasks').select('*').in('id', items.map(function (x) { return x.id; }).slice(0, 1000)).then(function (r2) {
-        var o = afterWrite(chk(r2)); o.count = n; return o;
+        var rows = chk(r2), o = afterWrite(rows); o.count = n; o.tasks = rows.map(function (r) { return cache.byId[r.id] ? view(cache.byId[r.id]) : null; }).filter(Boolean); return o;
       });
     }).catch(function (e) { throw err(e); });
   }

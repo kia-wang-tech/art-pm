@@ -284,7 +284,8 @@ var Engine = (function () {
       });
       if (jumped) {
         var blocker = queues[jumped.owner][head[jumped.owner]];
-        R[jumped.id].warn.push('排序衝突：已提前到 ' + blocker.id + ' 之前（' + blocker.id + ' 在等的前置要靠這項之後的工作）');
+        R[jumped.id].warn.push('排序衝突：' + blocker.id + '「' + blocker.title + '」在排隊順序上排在這項前面，但它要等這項（或排在這項後面的工作）完成才能開始，所以系統先做這項。建議把這項的順序移到 ' + blocker.id + ' 之前。');
+        R[jumped.id].conflict = blocker.id;
         place(jumped);
         continue;
       }

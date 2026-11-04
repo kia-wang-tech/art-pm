@@ -100,7 +100,7 @@ function index() {
 function applyComputed(m) {
   Object.keys(m || {}).forEach(function (id) {
     var t = byId[id]; if (!t) return; var c = m[id];
-    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7];
+    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7]; t.conflict = c[8] || '';
   });
 }
 function upsert(t) { if (byId[t.id]) Object.assign(byId[t.id], t); else { S.data.tasks.push(t); byId[t.id] = t; } index(); }
@@ -931,8 +931,16 @@ function popPreds(anchor, t) {
   var cur = split(t.preds);
   var p = openPop(anchor, '<div class="lab">前置工項（要先完成的工作）</div><div id="popCur"></div><div class="sep"></div><input class="field" placeholder="搜尋工項名稱或 ID 加入" id="popQ"><div id="popL"></div>', 320);
   var drawCur = function () {
-    $('#popCur').innerHTML = cur.length ? cur.map(function (id) { var x = byId[id]; return '<div class="opt" data-rm="' + esc(id) + '"><span class="chip"><span class="d" style="background:' + (x ? ST_HEX[x.status] : '#999') + '"></span>' + esc(id) + '</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x ? x.title : '') + '</span><span class="faint" title="移除">✕</span></div>'; }).join('') : '<div class="lab">沒有前置，可以直接開始</div>';
-    $$('[data-rm]', p).forEach(function (el) { el.addEventListener('click', function () { cur = cur.filter(function (x) { return x !== el.dataset.rm; }); save(); }); });
+    // 點工項本身＝打開那個工項；只有按右邊的 ✕（再確認一次）才會移除
+    $('#popCur').innerHTML = cur.length ? cur.map(function (id) { var x = byId[id]; return '<div class="opt" data-go="' + esc(id) + '" title="打開這個工項"><span class="chip"><span class="d" style="background:' + (x ? ST_HEX[x.status] : '#999') + '"></span>' + esc(id) + '</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x ? x.title : '') + '</span><button class="btn sm ghost xrm" data-rm="' + esc(id) + '" title="移除這個前置">✕</button></div>'; }).join('') : '<div class="lab">沒有前置，可以直接開始</div>';
+    $$('[data-go]', p).forEach(function (el) { el.addEventListener('click', function () { var id = el.dataset.go; if (!byId[id]) { toast('找不到 ' + id + '（可能已封存）', true); return; } closePop(); openTask(id); }); });
+    $$('[data-rm]', p).forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = '確定移除？'; el.classList.add('danger'); setTimeout(function () { if (el.isConnected) { el.dataset.sure = ''; el.textContent = '✕'; el.classList.remove('danger'); } }, 3000); return; }
+        cur = cur.filter(function (x) { return x !== el.dataset.rm; }); save();
+      });
+    });
   };
   var save = function () { closePop(); patchTask(t.id, { preds: cur.join(', ') }, '已更新前置，排程已重算'); };
   var draw = function () {

@@ -528,3 +528,8 @@ body.colresize { cursor: col-resize; user-select: none; }
 .tagwrap .tagin { border: 0; outline: none; background: transparent; flex: 1; min-width: 140px; font: inherit; color: inherit; }
 .list2 .tagc { pointer-events: none; }
 .gbar.help { opacity: .6; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.4) 0 4px, transparent 4px 8px); }
+.pop.flexpop { display: flex; flex-direction: column; overflow: hidden; max-height: 360px; }
+.pop.flexpop > * { flex: none; }
+.pop.flexpop #mpL { flex: 1 1 auto; }
+.pop .xrm { padding: 0 8px; height: 24px; flex: none; }
+.pop .xrm.danger { color: var(--danger); font-weight: 600; }

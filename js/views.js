@@ -215,7 +215,10 @@ function drawerBody() {
   var sel = function (k, opts, en) { return '<select class="field" name="' + k + '"' + (en ? '' : ' disabled') + '>' + opts.map(function (o) { var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o; return '<option value="' + esc(v) + '"' + (String(v) === String(t[k]) ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</select>'; };
   var h = '';
   if (!isNew) {
-    (t.warns || []).forEach(function (w) { h += '<div class="box ' + sev(w) + '">' + esc(w) + '</div>'; });
+    (t.warns || []).forEach(function (w) {
+      var fix = /^排序衝突/.test(w) && t.conflict && full && t.owner ? '<div style="margin-top:8px"><button class="btn sm" id="fixOrder">把這項移到 ' + esc(t.conflict) + ' 前面</button></div>' : '';
+      h += '<div class="box ' + sev(w) + '">' + esc(w) + fix + '</div>';
+    });
     if (t.info) h += '<div class="box">' + esc(t.info) + '</div>';
   }
   h += '<div id="impact"></div>';
@@ -273,6 +276,16 @@ function drawerBody() {
   if (full) bindPredInput();
   var on = function (id, fn) { var el = $(id); if (el) el.addEventListener('click', fn); };
   on('#dSave', function () { saveDrawer(false); });
+  on('#fixOrder', function () {
+    // 這個人排隊中的工作照目前順序排，把這項移到衝突工項的前面
+    var q = S.data.tasks.filter(function (x) { return x.owner === t.owner && x.mode !== '平行' && (x.status === '未開始' || x.status === '暫停'); })
+      .sort(function (a, b) { return (Number(a.prio) || 0) - (Number(b.prio) || 0) || (a.id < b.id ? -1 : 1); }).map(function (x) { return x.id; });
+    q = q.filter(function (id) { return id !== t.id; });
+    var at = q.indexOf(t.conflict); if (at < 0) { toast('找不到 ' + t.conflict + '，請到人員排程手動調整', true); return; }
+    q.splice(at, 0, t.id);
+    busy(true);
+    call('reorderQueue', t.owner, q).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); toast('已調整 ' + t.owner + ' 的工作順序'); openTask(t.id); render(); }).catch(fail);
+  });
   on('#dSaveNext', function () { saveDrawer(true); });
   on('#dDel', function () {
     if (!confirm('刪除「' + t.title + '」？刪除後無法復原。若只是不做了，建議把狀態改成「取消」。')) return;
@@ -313,7 +326,7 @@ function bindHelperBox(box, hidden, en) {
 function openMultiPick(anchor, groups, selected, done, opt) {
   opt = opt || {};
   var sel = selected.slice();
-  var p = openPop(anchor, '<div class="lab">' + esc(opt.title || '選擇') + '</div><input class="field" id="mpQ" placeholder="輸入關鍵字篩選" autocomplete="off"><div id="mpL" style="max-height:260px;overflow:auto"></div><div style="display:flex;gap:6px;padding:6px 4px 2px"><button class="btn sm primary" id="mpOk">確定</button><button class="btn sm" id="mpNo">取消</button><span class="faint" id="mpN" style="margin-left:auto;font-size:12px;align-self:center"></span></div>', 300);
+  var p = openPop(anchor, '<div class="lab">' + esc(opt.title || '選擇') + '</div><input class="field" id="mpQ" placeholder="輸入關鍵字篩選" autocomplete="off"><div id="mpL" style="flex:1;min-height:0;overflow:auto"></div><div style="display:flex;gap:6px;padding:6px 4px 2px"><button class="btn sm primary" id="mpOk">確定</button><button class="btn sm" id="mpNo">取消</button><span class="faint" id="mpN" style="margin-left:auto;font-size:12px;align-self:center"></span></div>', 300);
   var draw = function () {
     var q = $('#mpQ', p).value.trim().toLowerCase(), h = '', any = false;
     var known = {};
@@ -334,6 +347,7 @@ function openMultiPick(anchor, groups, selected, done, opt) {
   $('#mpQ', p).addEventListener('input', draw);
   $('#mpNo', p).addEventListener('click', closePop);
   $('#mpOk', p).addEventListener('click', function () { closePop(); done(sel); });
+  p.classList.add('flexpop');
   draw(); $('#mpQ', p).focus();
 }
 
@@ -677,7 +691,7 @@ function openQueue(name) {
   var qs = $('#qSave');
   if (qs) qs.addEventListener('click', function () {
     busy(true);
-    call('reorderQueue', name, order).then(function (r) { applyComputed(r.computed); busy(false); closeModal(); toast('已更新順序並重算時程'); render(); }).catch(fail);
+    call('reorderQueue', name, order).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已更新順序並重算時程'); render(); }).catch(fail);
   });
 }
 
@@ -774,7 +788,7 @@ function openProject(p) {
   if (b) b.addEventListener('click', function () {
     if (!confirm('把「' + p.name + '」所有未完成工項的基準，改成目前的預計完成日？')) return;
     busy(true);
-    call('resetBaseline', p.id).then(function (r) { applyComputed(r.computed); busy(false); closeModal(); toast('已重設 ' + r.count + ' 個工項的基準'); render(); }).catch(fail);
+    call('resetBaseline', p.id).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已重設 ' + r.count + ' 個工項的基準'); render(); }).catch(fail);
   });
 }
 
