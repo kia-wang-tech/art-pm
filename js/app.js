@@ -12,10 +12,27 @@ function md(s) { return s ? (+s.slice(5, 7)) + '/' + (+s.slice(8, 10)) : ''; }
 function wk(n) { return new Date(n * 864e5).getUTCDay(); }
 function isOff(n) { var s = ds(n); if (S.data.makeup[s]) return false; var w = wk(n); return w === 0 || w === 6 || !!S.data.holidays[s]; }
 function split(s) { return String(s || '').split(/[\s,，、;；]+/).filter(Boolean); }
-function debounce(fn, ms) { var t; return function () { var a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms); }; }
+function debounce(fn, ms) { var t; return function () { var a = arguments, self = this; clearTimeout(t); var run = function () { if (COMPOSING) { t = setTimeout(run, 150); return; } fn.apply(self, a); }; t = setTimeout(run, ms); }; }
+/* 中文輸入法（注音、倉頡、拼音）組字中：快捷鍵一律不處理、畫面也不重畫，避免選字被打斷 */
+var COMPOSING = false;
+document.addEventListener('compositionstart', function () { COMPOSING = true; }, true);
+document.addEventListener('compositionend', function () { COMPOSING = false; setTimeout(function () { if (typeof flushSync === 'function') flushSync(); }, 0); }, true);
+window.addEventListener('keydown', function (e) { if (e.isComposing || e.keyCode === 229) e.stopImmediatePropagation(); }, true);
+window.addEventListener('keyup', function (e) { if (e.isComposing || e.keyCode === 229) e.stopImmediatePropagation(); }, true);
+/* 訊息：一般訊息會留著，按 ✕ 或重新整理才消失；最多 5 則，超過時最舊的先消失。
+   很短的確認（例如「已儲存」）幾秒後自動消失，避免堆滿畫面。 */
 function toast(msg, err) {
-  var t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
-  $('#toasts').appendChild(t); setTimeout(function () { t.remove(); }, err ? 6000 : 2800);
+  var box = $('#toasts'); if (!box) return;
+  msg = String(msg);
+  var quick = !err && msg.length <= 8;
+  var t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : '') + (quick ? ' quick' : '');
+  t.innerHTML = '<span class="tm"></span>' + (quick ? '' : '<button class="tx" title="關閉" aria-label="關閉">✕</button>');
+  $('.tm', t).textContent = msg;
+  var x = $('.tx', t); if (x) x.addEventListener('click', function () { t.remove(); });
+  box.appendChild(t);
+  if (quick) setTimeout(function () { t.remove(); }, 2500);
+  var all = $$('.toast:not(.quick)', box);
+  while (all.length > 5) all.shift().remove();
 }
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
@@ -41,6 +58,7 @@ function need(name) {
 var IC = {
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>',
   help: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/></svg>',
+  chevL: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 13h4M7 17h8"/></svg>',
@@ -137,6 +155,16 @@ function isMyReview(t) {
 function canUpdate(t) { return canEdit(t) || t.owner === S.data.me.name; }
 function statusChoices(t) { return canEdit(t) ? STATUSES : ['未開始', '進行中', '待驗收']; }
 function projName(id) { return (projById[id] || {}).name || id; }
+/* 專案圖示：上傳的圖片 > emoji > 專案顏色＋名稱第一個字 */
+function picon(pOrId, size) {
+  var p = typeof pOrId === 'string' ? projById[pOrId] : pOrId; size = size || 18;
+  var st = 'width:' + size + 'px;height:' + size + 'px;';
+  if (!p) return '<span class="picon" style="' + st + '"></span>';
+  var ic = p.icon || '';
+  if (/^data:image\//.test(ic)) return '<img class="picon img" src="' + esc(ic) + '" alt="" style="' + st + '">';
+  if (ic) return '<span class="picon emo" style="' + st + 'font-size:' + Math.round(size * 0.82) + 'px">' + esc(ic) + '</span>';
+  return '<span class="picon" style="' + st + 'font-size:' + Math.max(9, Math.round(size * 0.58)) + 'px;background:' + pcolor(p.id) + '">' + esc((p.name || '?').trim().charAt(0)) + '</span>';
+}
 function pcolor(id) { var p = projById[id]; if (p && p.color) return p.color; var i = S.data.projects.findIndex(function (x) { return x.id === id; }); return GROUP_COLORS[(i < 0 ? 0 : i) % GROUP_COLORS.length]; }
 function hash(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
 function avatar(name, sm) {
@@ -178,6 +206,7 @@ function patchTask(id, patch, okMsg) {
   saveLater(id, patch, function (cur) { var o = Object.assign({ id: cur.id, at: cur.at }, patch); return call('saveTask', o); }, okMsg);
 }
 function isEditing() {
+  if (COMPOSING) return true;
   var a = document.activeElement;
   if ($('#drawer') && $('#drawer').classList.contains('open') || $('.modal') || $('.pop')) return true;
   if (!a || !/INPUT|TEXTAREA|SELECT/.test(a.tagName)) return false;
@@ -208,6 +237,7 @@ function go(path) { if (location.hash === '#/' + path) render(); else location.h
 window.addEventListener('hashchange', function () { S.route = parseRoute(); S.sel = null; S.picked = {}; closePop(); if (S.data) render(); var a = $('.app'); if (a) a.classList.remove('nav-open'); });
 
 /* ---------------- 主題 ---------------- */
+function sideMini() { try { return localStorage.getItem('pm-side') === 'mini'; } catch (e) { return false; } }
 function theme() { try { return localStorage.getItem('pm-theme') || 'auto'; } catch (e) { return 'auto'; } }
 function cycleTheme() {
   var next = { auto: 'light', light: 'dark', dark: 'auto' }[theme()];
@@ -278,8 +308,8 @@ function openPreviewPicker() {
 function renderShell() {
   var d = S.data;
   $('#root').innerHTML =
-    '<div class="app">' +
-    '<aside class="side"><div class="brand"><span class="mark">' + IC.brand + '</span>美術專案管理</div><nav class="nav" id="nav"></nav>' +
+    '<div class="app' + (sideMini() ? ' side-mini' : '') + '">' +
+    '<aside class="side"><div class="brand"><span class="mark">' + IC.brand + '</span><span class="lb">美術專案管理</span><button class="side-tg" id="sideBtn" title="收合側邊欄">' + IC.chevL + '</button></div><nav class="nav" id="nav"></nav>' +
     '<div class="side-foot">' + avatar(d.me.name) + '<div class="who"><b>' + esc(d.me.name) + '</b><span>' + esc(d.me.role) + '</span></div>' +
     ((S.realData && S.realData.me.role === '管理員' && !S.preview) ? '<button class="btn ghost icon" id="pvBtn" title="以其他人的視角預覽">' + IC.eye + '</button>' : '') +
     '<button class="btn ghost icon" id="themeBtn"></button><button class="btn ghost icon" id="logoutBtn" title="登出">' + IC.logout + '</button></div></aside>' +
@@ -295,24 +325,31 @@ function renderShell() {
   $('#logoutBtn').addEventListener('click', function () { API.signOut(); });
   $('#reloadBtn').addEventListener('click', function () { load(S.data.history); });
   $('#menuBtn').addEventListener('click', function () { $('.app').classList.toggle('nav-open'); });
+  $('#sideBtn').addEventListener('click', function () {
+    var on = !$('.app').classList.contains('side-mini');
+    $('.app').classList.toggle('side-mini', on);
+    try { localStorage.setItem('pm-side', on ? 'mini' : ''); } catch (e) {}
+    $('#sideBtn').title = on ? '展開側邊欄' : '收合側邊欄';
+  });
+  $('#sideBtn').title = sideMini() ? '展開側邊欄' : '收合側邊欄';
   $('#content').addEventListener('click', function (e) { if (window.innerWidth <= 860 && !e.target.closest('.side')) $('.app').classList.remove('nav-open'); });
 }
 function renderNav() {
   var d = S.data, r = S.route;
   var mineCount = d.tasks.filter(function (t) { return t.owner === d.me.name && (t.status === '進行中' || t.status === '未開始'); }).length;
   var review = isPM() ? d.tasks.filter(isMyReview).length : 0;
-  var h = '<a href="#/" class="' + (r.view === 'home' ? 'on' : '') + '"><span class="ic">' + IC.home + '</span>首頁</a>';
-  h += '<a href="#/mine" class="' + (r.view === 'mine' ? 'on' : '') + '"><span class="ic">' + IC.mine + '</span>我的工作' + (review ? '<span class="badge" title="等你驗收">' + review + '</span>' : (mineCount ? '<span class="badge" style="background:var(--line);color:var(--ink2)">' + mineCount + '</span>' : '')) + '</a>';
-  h += '<a href="#/people" class="' + (r.view === 'people' ? 'on' : '') + '"><span class="ic">' + IC.people + '</span>人員排程</a>';
+  var h = '<a href="#/" title="首頁" class="' + (r.view === 'home' ? 'on' : '') + '"><span class="ic">' + IC.home + '</span><span class="lb">首頁</span></a>';
+  h += '<a href="#/mine" title="我的工作" class="' + (r.view === 'mine' ? 'on' : '') + '"><span class="ic">' + IC.mine + '</span><span class="lb">我的工作</span>' + (review ? '<span class="badge" title="等你驗收">' + review + '</span>' : (mineCount ? '<span class="badge" style="background:var(--line);color:var(--ink2)">' + mineCount + '</span>' : '')) + '</a>';
+  h += '<a href="#/people" title="人員排程" class="' + (r.view === 'people' ? 'on' : '') + '"><span class="ic">' + IC.people + '</span><span class="lb">人員排程</span></a>';
   h += '<div class="sec"><span>專案</span>' + (isPM() ? '<button id="navNewProj" title="新增專案">＋</button>' : '') + '</div>';
   var ps = d.projects.slice().sort(function (a, b) { return (a.status === '封存') - (b.status === '封存') || a.name.localeCompare(b.name, 'zh-Hant'); });
   ps.forEach(function (p) {
     var on = (r.view === 'board' || r.view === 'gantt') && r.project === p.id;
-    h += '<a href="#/p/' + encodeURIComponent(p.id) + '" class="' + (on ? 'on ' : '') + (p.status === '封存' ? 'archived' : '') + '"><span class="dot" style="background:' + pcolor(p.id) + '"></span><span class="pnm">' + esc(p.name) + '</span></a>';
+    h += '<a href="#/p/' + encodeURIComponent(p.id) + '" title="' + esc(p.name) + '" class="' + (on ? 'on ' : '') + (p.status === '封存' ? 'archived' : '') + '">' + picon(p, 20) + '<span class="pnm">' + esc(p.name) + '</span></a>';
   });
   h += '<div class="sec"><span>' + (isPM() ? '管理' : '其他') + '</span></div>';
-  if (isPM()) h += '<a href="#/settings" class="' + (r.view === 'settings' ? 'on' : '') + '"><span class="ic">' + IC.settings + '</span>設定</a>';
-  h += '<a href="#/help" class="' + (r.view === 'help' ? 'on' : '') + '"><span class="ic">' + IC.help + '</span>使用說明</a>';
+  if (isPM()) h += '<a href="#/settings" title="設定" class="' + (r.view === 'settings' ? 'on' : '') + '"><span class="ic">' + IC.settings + '</span><span class="lb">設定</span></a>';
+  h += '<a href="#/help" title="使用說明" class="' + (r.view === 'help' ? 'on' : '') + '"><span class="ic">' + IC.help + '</span><span class="lb">使用說明</span></a>';
   $('#nav').innerHTML = h;
   var np = $('#navNewProj'); if (np) np.addEventListener('click', function () { openProject(null); });
 }
@@ -322,6 +359,7 @@ function setViews(html) { var v = $('#views'); v.innerHTML = html || ''; v.class
 
 function render() {
   if (!S.data) return;
+  if (COMPOSING) { S.needRender = true; return; }
   var ct = $('#content'), sameView = S._lastHash === location.hash, st = ct ? ct.scrollTop : 0;
   S._lastHash = location.hash;
   var fa = document.activeElement, keep = fa && fa.id && fa.closest && fa.closest('.toolbar') ? { id: fa.id, s: fa.selectionStart, e: fa.selectionEnd } : null;
@@ -377,7 +415,7 @@ function renderHome(c) {
     var late = open.filter(function (t) { return (t.warns || []).some(function (x) { return /^(進度落後|比基準晚)/.test(x); }); }).length;
     var over = open.filter(function (t) { return (t.warns || []).some(function (x) { return /^超過出版日/.test(x); }); }).length;
     var lastEnd = open.reduce(function (a, t) { return t.end > a ? t.end : a; }, '');
-    h += '<div class="card pcard" data-p="' + esc(p.id) + '"><div class="hd"><span style="width:12px;height:12px;border-radius:3px;background:' + pcolor(p.id) + '"></span><b>' + esc(p.name) + '</b>' + (p.status !== '進行中' ? '<span class="pill st-暫停">' + esc(p.status) + '</span>' : '') + '</div>' +
+    h += '<div class="card pcard" data-p="' + esc(p.id) + '"><div class="hd">' + picon(p, 22) + '<b>' + esc(p.name) + '</b>' + (p.status !== '進行中' ? '<span class="pill st-暫停">' + esc(p.status) + '</span>' : '') + '</div>' +
       '<div style="display:flex;align-items:flex-end;gap:10px"><span class="big">' + (w ? Math.round(wd / w * 100) : 0) + '%</span><span class="muted" style="font-size:12px;padding-bottom:3px">完成（依工作天）' + (lastEnd ? '・預計 ' + md(lastEnd) + ' 全部完成' : '') + '</span></div>' +
       battery(ts) +
       '<div class="row3"><span><b>' + open.filter(function (t) { return t.status === '進行中'; }).length + '</b>進行中</span><span><b>' + open.filter(function (t) { return t.status === '待驗收'; }).length + '</b>待驗收</span>' +
@@ -420,7 +458,7 @@ function listItem(t) {
 
 /* ---------------- 專案共用：標題、檢視切換、篩選 ---------------- */
 function projectHeader(p, view) {
-  setTitle('<span class="dot" style="width:14px;height:14px;border-radius:4px;background:' + pcolor(p.id) + '"></span><span class="t">' + esc(p.name) + '</span>' + (p.status !== '進行中' ? ' <span class="pill st-暫停" style="font-size:11px">' + esc(p.status) + '</span>' : ''));
+  setTitle(picon(p, 26) + '<span class="t">' + esc(p.name) + '</span>' + (p.status !== '進行中' ? ' <span class="pill st-暫停" style="font-size:11px">' + esc(p.status) + '</span>' : ''));
   setViews('<a href="#/p/' + encodeURIComponent(p.id) + '" class="' + (view === 'board' ? 'on' : '') + '">' + '<span style="width:16px;height:16px;display:inline-flex">' + IC.board + '</span>主表格</a>' +
     '<a href="#/p/' + encodeURIComponent(p.id) + '/gantt" class="' + (view === 'gantt' ? 'on' : '') + '"><span style="width:16px;height:16px;display:inline-flex">' + IC.gantt + '</span>甘特圖</a>');
   var acts = '';

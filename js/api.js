@@ -126,7 +126,7 @@ var API = (function () {
     });
   }
   function clientProject(p) {
-    return { id: p.id, name: p.name, code: p.code, status: p.status, pm: p.pm, start: p.start || '', target: p.target || '', color: p.color, note: p.note, canEdit: canEditProject(p) };
+    return { id: p.id, name: p.name, code: p.code, status: p.status, pm: p.pm, start: p.start || '', target: p.target || '', color: p.color, note: p.note, icon: p.icon || '', canEdit: canEditProject(p) };
   }
   function snapshot(history) {
     var cutoff = Engine.dn(today()) - HISTORY_DAYS;
@@ -479,6 +479,7 @@ var API = (function () {
     if (!obj.name) return Promise.reject(new Error('請填專案名稱。'));
     var row = { name: obj.name, code: obj.code || '', status: obj.status || '進行中', start: dOrNull(obj.start), target: dOrNull(obj.target), color: obj.color || '', note: obj.note || '' };
     if (obj.pm !== undefined) row.pm = obj.pm;
+    if (obj.icon !== undefined) row.icon = obj.icon || '';
     var q = obj.id ? sb.from('projects').update(row).eq('id', obj.id).select() : sb.from('projects').insert(Object.assign({ id: '' }, row)).select();
     return q.then(function (res) {
       var rows = chk(res);
@@ -736,7 +737,7 @@ var API = (function () {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
       done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
-    projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註' }],
+    projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註', icon: '圖示' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
     leaves: ['休假', { person: '人員', start_date: '開始日', end_date: '結束日', days: '天數', type: '類型', note: '說明' }],

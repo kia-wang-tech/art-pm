@@ -374,7 +374,10 @@ svg.arrows path.tmp { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4;
 
 /* ---------- 通知 ---------- */
 .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
-.toast { background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: min(560px, calc(100vw - 32px)); box-shadow: var(--pop-shadow); pointer-events: auto; }
+.toast { background: var(--ink); color: var(--surface); padding: 10px 10px 10px 16px; border-radius: 8px; font-size: 13px; max-width: min(560px, calc(100vw - 32px)); box-shadow: var(--pop-shadow); pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+.toast.quick { padding-right: 16px; }
+.toast .tx { background: none; border: 0; color: inherit; opacity: .7; cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1.5; }
+.toast .tx:hover { opacity: 1; }
 .toast.err { background: var(--danger); color: #fff; }
 .sync { font-size: 12px; color: var(--warn); display: inline-flex; align-items: center; gap: 6px; }
 .sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); animation: pulse 1s infinite; }
@@ -463,3 +466,28 @@ input.field.bad { box-shadow: 0 0 0 2px var(--danger); }
 .help ul { margin: 0; padding-left: 20px; line-height: 1.7; font-size: 14px; color: var(--ink2); }
 .help li + li { margin-top: 4px; }
 .help b { color: var(--ink); }
+
+/* ---------- 專案圖示 ---------- */
+.picon { display: inline-grid; place-items: center; flex: none; border-radius: 6px; color: #fff; font-weight: 700; line-height: 1; overflow: hidden; }
+.picon.img { object-fit: cover; background: var(--surface2); }
+.picon.emo { background: transparent; color: inherit; font-weight: 400; }
+.top h1 .picon { margin-right: 2px; border-radius: 7px; }
+
+/* ---------- 側邊欄收合 ---------- */
+.brand .lb { flex: 1; white-space: nowrap; overflow: hidden; }
+.side-tg { border: 0; background: none; color: var(--ink3); width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; cursor: pointer; flex: none; padding: 0; }
+.side-tg:hover { background: var(--hover); color: var(--ink); }
+.side-tg svg { width: 16px; height: 16px; transition: transform .2s; }
+@media (min-width: 861px) {
+  .app { transition: grid-template-columns .18s; }
+  .app.side-mini { grid-template-columns: 64px 1fr; }
+  .side-mini .brand { flex-direction: column; padding: 14px 0 8px; gap: 8px; }
+  .side-mini .brand .lb, .side-mini .nav .lb, .side-mini .nav .pnm, .side-mini .nav .sec span, .side-mini .nav .sec button, .side-mini .side-foot .who { display: none; }
+  .side-mini .side-tg svg { transform: rotate(180deg); }
+  .side-mini .nav { padding: 4px 8px; }
+  .side-mini .nav a { justify-content: center; padding: 8px 0; position: relative; }
+  .side-mini .nav a .badge { position: absolute; top: 2px; right: 2px; padding: 0 4px; font-size: 10px; min-width: 16px; text-align: center; }
+  .side-mini .nav .sec { padding: 10px 0 4px; border-top: 1px solid var(--line2); margin: 6px 6px 0; }
+  .side-mini .side-foot { flex-direction: column; padding: 10px 0; gap: 6px; }
+}
+@media (max-width: 860px) { .side-tg { display: none; } }

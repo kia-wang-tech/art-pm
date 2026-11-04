@@ -592,6 +592,27 @@ function openExport() {
   });
 }
 
+/* 圖片 → 置中裁成正方形、縮成 64×64，轉成 data URL（優先 WebP，太大再改 JPEG） */
+function iconFromFile(file) {
+  return new Promise(function (ok, no) {
+    if (!/^image\//.test(file.type)) { no(new Error('請選擇圖片檔。')); return; }
+    if (file.size > 15 * 1024 * 1024) { no(new Error('圖片太大了（超過 15MB）。')); return; }
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var S2 = 64, cv = document.createElement('canvas'); cv.width = cv.height = S2;
+      var g = cv.getContext('2d'), w = img.naturalWidth, h = img.naturalHeight, m = Math.min(w, h);
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, (w - m) / 2, (h - m) / 2, m, m, 0, 0, S2, S2);
+      URL.revokeObjectURL(url);
+      var out = cv.toDataURL('image/webp', 0.9);
+      if (out.indexOf('data:image/webp') !== 0) out = cv.toDataURL('image/png');
+      if (out.length > 28000) out = cv.toDataURL('image/jpeg', 0.85);
+      ok(out);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); no(new Error('讀不到這張圖片。')); };
+    img.src = url;
+  });
+}
 function openProject(p) {
   var isNew = !p; p = p || { name: '', code: '', status: '進行中', pm: '', start: '', target: '', color: GROUP_COLORS[S.data.projects.length % GROUP_COLORS.length], note: '' };
   var admin = isAdmin();
@@ -599,15 +620,29 @@ function openProject(p) {
   h += '<label>專案名稱<input class="field" id="pjName" value="' + esc(p.name) + '"></label><label>代碼<input class="field" id="pjCode" value="' + esc(p.code) + '"></label>';
   h += '<label>狀態<select class="field" id="pjStatus">' + ['進行中', '暫停', '封存'].map(function (s) { return '<option' + (s === p.status ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></label>';
   h += '<label>顏色<input class="field" type="color" id="pjColor" value="' + esc(p.color || pcolor(p.id || '')) + '" style="padding:2px;height:32px"></label>';
+  h += '<div class="full" style="grid-column:1/-1"><div style="font-size:13px;font-weight:600;margin-bottom:6px">圖示</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span id="pjIcPrev"></span>' +
+    '<label class="btn sm" style="cursor:pointer">上傳圖片<input type="file" id="pjIcFile" accept="image/*" hidden></label>' +
+    '<input class="field" id="pjIcEmo" placeholder="或輸入一個 emoji" maxlength="4" style="width:150px" value="' + esc(/^data:/.test(p.icon || '') ? '' : (p.icon || '')) + '">' +
+    '<button class="btn sm ghost" id="pjIcClr">用預設</button><span class="hint">圖片會自動裁成正方形、縮成 64×64。沒有設定時，顯示專案顏色＋名稱第一個字。</span></div></div>';
   h += '<label class="full">負責的 PM（姓名，多位用逗號；空白＝所有 PM 都能改）<input class="field" id="pjPm" value="' + esc(p.pm) + '"' + (admin ? '' : ' disabled title="只有管理員能改"') + '></label>';
   h += '<label>開始日<input class="field" type="date" id="pjStart" value="' + esc(p.start) + '"></label><label>目標日<input class="field" type="date" id="pjTarget" value="' + esc(p.target) + '"></label>';
   h += '<label class="full">備註<input class="field" id="pjNote" value="' + esc(p.note) + '"></label></div>';
   if (!isNew) h += '<div class="box" style="margin-top:14px"><b>重設基準</b>：把目前的預計完成日存成基準，之後延誤會顯示「比基準晚 N 天」。建議在專案計畫確定、或每個版本開始時做一次。<div style="margin-top:8px"><button class="btn sm" id="pjBase">重設基準</button></div></div>';
   h += '<div class="mfoot"><button class="btn" id="pjC">取消</button><button class="btn primary" id="pjGo">' + (isNew ? '建立專案' : '儲存') + '</button></div>';
   modal(h);
+  var icon = p.icon || '';
+  var showIc = function () { $('#pjIcPrev').innerHTML = picon({ id: p.id || '', name: $('#pjName').value || '?', icon: icon, color: $('#pjColor').value }, 40); };
+  showIc();
+  ['#pjName', '#pjColor'].forEach(function (id) { $(id).addEventListener('input', function () { if (!icon) showIc(); }); });
+  $('#pjIcEmo').addEventListener('input', function (e) { icon = e.target.value.trim(); showIc(); });
+  $('#pjIcClr').addEventListener('click', function () { icon = ''; $('#pjIcEmo').value = ''; showIc(); });
+  $('#pjIcFile').addEventListener('change', function (e) {
+    var f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    iconFromFile(f).then(function (url) { icon = url; $('#pjIcEmo').value = ''; showIc(); }).catch(function (err) { toast(err.message, true); });
+  });
   $('#pjC').addEventListener('click', closeModal);
   $('#pjGo').addEventListener('click', function () {
-    var o = { id: p.id, name: $('#pjName').value.trim(), code: $('#pjCode').value.trim(), status: $('#pjStatus').value, start: $('#pjStart').value, target: $('#pjTarget').value, color: $('#pjColor').value, note: $('#pjNote').value };
+    var o = { id: p.id, name: $('#pjName').value.trim(), code: $('#pjCode').value.trim(), status: $('#pjStatus').value, start: $('#pjStart').value, target: $('#pjTarget').value, color: $('#pjColor').value, note: $('#pjNote').value, icon: icon };
     if (admin) o.pm = $('#pjPm').value.trim();
     busy(true);
     call('saveProject', o).then(function (r) {
