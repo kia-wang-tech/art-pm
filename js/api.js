@@ -72,26 +72,27 @@ var API = (function () {
     var hol = {}, mk = {};
     cache.calendar.forEach(function (c) { if (c.type === '補班') mk[c.day] = 1; else hol[c.day] = c.name || '假日'; });
     return {
-      tasks: tasks, holidays: hol, makeup: mk, today: today(), lenientPreds: true,
+      tasks: tasks, holidays: hol, makeup: mk, today: today(), lenientPreds: true, urgentDays: urgentDays(),
       staff: cache.people.filter(function (p) { return p.active; }).map(function (p) { return p.name; }),
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days }; })
     };
   }
+  function urgentDays() { var n = parseInt(cache.settings && cache.settings['趕期限天數'], 10); return n >= 0 ? n : 10; }
   function compute() {
     cache.out = Engine.schedule(engineInput(cache.tasks));
     return cache.out;
   }
   function decorate(t) {
     var r = cache.out && cache.out.result[t.id];
-    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; t.conflict = r.conflict || ''; }
-    else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; t.expect = undefined; }
+    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; t.rank = r.rank; t.why = r.why || null; }
+    else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; t.expect = undefined; t.rank = undefined; t.why = null; }
     return t;
   }
   /** 給畫面用的複本：畫面上的樂觀更新不會動到這裡的資料，存檔時才比得出差異 */
   function view(t) { return decorate(copyTask(t)); }
   function computedMap() {
     var m = {};
-    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect, r.conflict || '']; });
+    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect, '', r.rank, r.why || null]; });
     return m;
   }
   function putTask(t) {
@@ -405,6 +406,54 @@ var API = (function () {
       items.sort(function (x, y) { return Math.abs(y.delta) - Math.abs(x.delta); });
       var s = after.result[id];
       return Promise.resolve({ self: { start: s.start, end: s.end, warns: s.warn }, items: items.slice(0, 200), total: items.length });
+    } catch (e) { return Promise.reject(err(e)); }
+  }
+
+  /** 換負責人時：每個在職人員接手這項的話，這項何時能完成、會讓他手上幾項延後 */
+  function suggestOwners(obj) {
+    try {
+      var id = obj.id || '（新工項）', orig = obj.id ? cache.byId[obj.id] : null;
+      var base = orig ? copyTask(orig) : { id: id, status: '未開始', mode: '排隊', qty: 1, doneQty: 0, prio: '' };
+      Object.keys(obj).forEach(function (k) { if (k in T_MAP) base[k] = obj[k]; });
+      base.id = id;
+      var before = cache.out, cal = before.cal, td = Engine.dn(today()), horizon = td + 28;
+      var people = cache.people.filter(function (p) { return p.active; });
+      var busyDays = {};
+      cache.tasks.forEach(function (t) {
+        if (t.id === id || t.mode === '平行' || !t.owner) return;
+        var r = before.result[t.id]; if (!r || !r.alloc) return;
+        var m = busyDays[t.owner] || (busyDays[t.owner] = {});
+        r.alloc.forEach(function (a) { if (a[1] > 0.01) m[a[0]] = 1; });
+      });
+      var rows = people.map(function (p) {
+        var t2 = copyTask(base); t2.owner = p.name;
+        t2.helper = Engine.splitNames(t2.helper).filter(function (n) { return n !== p.name; }).join(', ');
+        if (!orig || orig.owner !== p.name) { var mx = 0; cache.tasks.forEach(function (t) { if (t.owner === p.name && Number(t.prio) > mx) mx = Number(t.prio); }); t2.prio = mx + 10; }
+        var list = orig ? cache.tasks.map(function (t) { return t.id === id ? t2 : t; }) : cache.tasks.concat([t2]);
+        var after = Engine.schedule(engineInput(list)), s = after.result[id], delayed = 0, maxD = 0, late = 0;
+        cache.tasks.forEach(function (t) {
+          if (t.id === id || t.owner !== p.name) return;
+          var a = before.result[t.id], b = after.result[t.id];
+          if (!a || !b || !a.end || !b.end || a.end === b.end) return;
+          var d = cal.workdaysBetween(Engine.dn(a.end), Engine.dn(b.end));
+          if (d > 0) { delayed++; if (d > maxD) maxD = d; if (b.warn.some(function (w) { return w.indexOf('超過出版日') === 0; }) && !a.warn.some(function (w) { return w.indexOf('超過出版日') === 0; })) late++; }
+        });
+        // 接手前，未來四週已排了多少工作
+        var used = 0, cap = 0;
+        for (var x = td; x < horizon; x++) cap += cal.cap(p.name, x);
+        cache.tasks.forEach(function (t) {
+          if (t.id === id || t.mode === '平行') return;
+          var r = before.result[t.id]; if (!r || !r.alloc) return;
+          var mine = t.owner === p.name || Engine.splitNames(t.helper).indexOf(p.name) >= 0;
+          if (!mine) return;
+          r.alloc.forEach(function (a) { if (a[0] >= td && a[0] < horizon) used += a[1]; });
+        });
+        var free = null, bd = busyDays[p.name] || {};
+        for (var y = td; y < td + 400; y++) { if (cal.cap(p.name, y) > 0 && !bd[y]) { free = Engine.ds(y); break; } }
+        return { name: p.name, role: p.role, start: s.start, end: s.end, delayed: delayed, maxDelay: maxD, late: late, load: cap ? Math.round(used / cap * 100) : 0, free: free, current: !!(orig && orig.owner === p.name) };
+      });
+      rows.sort(function (a, b) { return (a.end < b.end ? -1 : a.end > b.end ? 1 : 0) || (a.delayed - b.delayed) || (a.load - b.load); });
+      return Promise.resolve(rows);
     } catch (e) { return Promise.reject(err(e)); }
   }
 
@@ -960,7 +1009,7 @@ var API = (function () {
   return {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
-    saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
+    saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
     applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), resetBaseline: mine(resetBaseline),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),

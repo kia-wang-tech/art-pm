@@ -100,7 +100,7 @@ function index() {
 function applyComputed(m) {
   Object.keys(m || {}).forEach(function (id) {
     var t = byId[id]; if (!t) return; var c = m[id];
-    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7]; t.conflict = c[8] || '';
+    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7]; t.rank = c[9]; t.why = c[10] || null;
   });
 }
 function upsert(t) { if (byId[t.id]) Object.assign(byId[t.id], t); else { S.data.tasks.push(t); byId[t.id] = t; } index(); }

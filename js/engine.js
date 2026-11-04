@@ -4,7 +4,9 @@
  * 規則：
  *  - 時間單位是「工作天」，可以有小數（0.5 天）。週末、行事曆的假日不算；行事曆的「補班」算。
  *  - 個人休假會扣掉那個人那幾天的可用時間（半天假 = 該天只剩 0.5）。
- *  - 排程方式「排隊」：佔用負責人的時間。同一人的排隊工項依「優先序」一個接一個做。
+ *  - 排程方式「排隊」：佔用負責人的時間。同一人的排隊工項依序一個接一個做，順序由系統自動決定：
+ *      趕期限（期限前 urgentDays 個工作天內要開始）→ 下游有其他人的工作在等 → 期限（含下游推回來的期限）先後 → 建立順序。
+ *    第一項在等前置時，空檔內做得完的後面工項會先插進來做。
  *  - 排程方式「平行」：不佔用負責人的時間（例如監修外包），只看前置與最早開始。
  *  - 開始時間 = 下列最晚者：今天、最早開始、所有前置完成（+前置後間隔）、負責人手上前一項排隊工作做完。
  *  - 完成 / 待驗收：用實際日期，不再移動。
@@ -199,11 +201,47 @@ var Engine = (function () {
       if (t.mode === '平行' || !t.owner) parallel.push(t);
       else (queues[t.owner] = queues[t.owner] || []).push(t);
     });
-    Object.keys(queues).forEach(function (o) {
-      queues[o].sort(function (a, b) {
-        return (num(a.prio, 1e9) - num(b.prio, 1e9)) || ((dn(a.earliest) || 0) - (dn(b.earliest) || 0)) || (a.id < b.id ? -1 : 1);
+    // ---- 排序：不看建立順序，依「趕期限 → 下游有其他人在等 → 期限先後」自動排 ----
+    var urgentDays = num(input.urgentDays, 10);
+    var openSt = function (t) { return t && t.status !== '完成' && t.status !== '取消' && t.status !== '待驗收'; };
+    var back = function (d, n) { var x = d, k = 0, g = 0; while (k < n && g++ < 4000) { x--; if (cal.isWorkday(x)) k++; } return x; };
+    var KY = {};
+    function keyOf(id, stack) {
+      if (KY[id]) return KY[id];
+      stack = stack || {};
+      var t = all[id], own = dn(t.release), due = own, src = own !== null ? 'own' : '', desc = {}, h = 1;
+      stack[id] = 1;
+      (succ[id] || []).forEach(function (sid) {
+        var s = all[sid];
+        if (!openSt(s) || stack[sid]) return;
+        var k = keyOf(sid, stack);
+        if (k.due !== null) {
+          var need = back(k.due, Math.max(Math.ceil(num(s.days, 0) - EPS), 0) + Math.max(Math.ceil(num(s.lag, 0) - EPS), 0));
+          if (due === null || need < due) { due = need; src = sid; }
+        }
+        desc[sid] = 1; Object.keys(k.desc).forEach(function (x) { desc[x] = 1; });
+        if (k.h + 1 > h) h = k.h + 1;
       });
+      delete stack[id];
+      var who = {}, n = 0;
+      Object.keys(desc).forEach(function (x) { var o = all[x].owner; if (o && o !== t.owner) { n++; who[o] = 1; } });
+      var ls = due === null ? null : back(due, Math.max(Math.ceil(num(t.days, 0) - EPS) - 1, 0));
+      var urgent = ls !== null && cal.workdaysBetween(today, ls) <= urgentDays;
+      KY[id] = { due: due, src: src, desc: desc, h: h, down: n, who: Object.keys(who), urgent: urgent, tier: urgent ? 0 : (n > 0 ? 1 : 2) };
+      return KY[id];
+    }
+    function cmpKey(a, b) {
+      var x = keyOf(a.id), y = keyOf(b.id);
+      return (x.tier - y.tier) || ((x.due === null ? 1e9 : x.due) - (y.due === null ? 1e9 : y.due)) || (y.down - x.down) || (y.h - x.h) ||
+        (num(a.prio, 1e9) - num(b.prio, 1e9)) || ((dn(a.earliest) || 0) - (dn(b.earliest) || 0)) || (a.id < b.id ? -1 : 1);
+    }
+    var waitingAll = list.filter(function (t) { return t.status === '未開始' || t.status === '暫停'; }).sort(cmpKey);
+    waitingAll.forEach(function (t, i) {
+      var k = keyOf(t.id);
+      R[t.id].rank = i;
+      R[t.id].why = { tier: k.tier, due: k.due === null ? '' : ds(k.due), src: k.src, down: k.down, who: k.who };
     });
+    Object.keys(queues).forEach(function (o) { queues[o].sort(cmpKey); });
     var head = {};
     Object.keys(queues).forEach(function (o) { head[o] = 0; });
     var done = {};
@@ -259,18 +297,29 @@ var Engine = (function () {
         var p = parallel[i];
         if (!done[p.id] && predsReady(p)) { place(p); progress = true; }
       }
-      // 各人排隊的第一項裡，挑最早能開始的先排（有協力人員時，大家的時間才會依先後佔用）
-      var best = null, bestPos = Infinity;
+      // 各人照排序挑下一項；第一項要等前置時，空檔內做得完的後面工項先插進來做（不會讓第一項晚開始）
+      var best = null, bestPos = Infinity, bestFill = null;
       Object.keys(queues).forEach(function (o) {
         var q = queues[o];
         while (head[o] < q.length && done[q[head[o]].id]) head[o]++;
         if (head[o] >= q.length) return;
         var t = q[head[o]];
         if (!predsReady(t)) return;
-        var pos = Math.max(readyPos(t), cursor[o] || today, today);
-        helpersOf(t).forEach(function (h) { pos = Math.max(pos, cursor[h] || today); });
-        if (pos < bestPos) { best = t; bestPos = pos; }
+        var c = Math.max(cursor[o] || today, today);
+        var startOf = function (x) { var p = Math.max(readyPos(x), c); helpersOf(x).forEach(function (h) { p = Math.max(p, cursor[h] || today); }); return p; };
+        var pos = startOf(t), pick = t, fill = null;
+        if (pos > c + EPS) {
+          for (var k = head[o] + 1; k < q.length; k++) {
+            var x = q[k];
+            if (done[x.id] || !predsReady(x)) continue;
+            var sp = startOf(x);
+            if (sp >= pos - EPS) continue;
+            if (cal.advance(o, sp, Math.max(num(x.days, 0), 0)).end <= pos + EPS) { pick = x; fill = t; pos = sp; break; }
+          }
+        }
+        if (pos < bestPos) { best = pick; bestPos = pos; bestFill = fill; }
       });
+      if (best && bestFill) R[best.id].info2 = '趁等「' + (bestFill.title || bestFill.id) + '」的前置時，先用空檔做這項';
       if (best) { place(best); continue; }
       if (progress) continue;
       // 卡住了：先找前置都排好、只是排隊順序在後面的工項
@@ -282,13 +331,7 @@ var Engine = (function () {
         }
         return false;
       });
-      if (jumped) {
-        var blocker = queues[jumped.owner][head[jumped.owner]];
-        R[jumped.id].warn.push('排序衝突：' + blocker.id + '「' + blocker.title + '」在排隊順序上排在這項前面，但它要等這項（或排在這項後面的工作）完成才能開始，所以系統先做這項。建議把這項的順序移到 ' + blocker.id + ' 之前。');
-        R[jumped.id].conflict = blocker.id;
-        place(jumped);
-        continue;
-      }
+      if (jumped) { place(jumped); continue; }
       // 還是卡住 → 循環相依
       var victim = null;
       list.forEach(function (t) { if (!victim && R[t.id].start === null && t.status !== '取消' && !done[t.id]) victim = t; });
@@ -310,6 +353,7 @@ var Engine = (function () {
         if (r.slip > 0) r.warn.push('比基準晚 ' + r.slip + ' 個工作天');
       }
       if (r.idle > 0) r.info = '負責人在此之前空等 ' + r.idle + ' 個工作天（等前置）';
+      if (r.info2) r.info = r.info ? r.info + '；' + r.info2 : r.info2;
     });
 
     // ---- 逾期未回報（提醒用）：r.stale = { kind, since, text } ----

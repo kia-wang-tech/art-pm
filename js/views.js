@@ -12,7 +12,7 @@ function renderMine(c) {
   var today = dn(d.today);
   var mine = d.tasks.filter(function (t) { return t.owner === who && t.status !== '完成' && t.status !== '取消'; })
     .concat(d.tasks.filter(function (t) { return t.owner !== who && t.status !== '完成' && t.status !== '取消' && Engine.splitNames(t.helper).indexOf(who) >= 0; }).map(function (t) { return Object.assign({}, t, { _help: t.owner }); }))
-    .sort(function (a, b) { return (a.prio || 0) - (b.prio || 0) || sortTasks(a, b); });
+    .sort(function (a, b) { return rankOf(a) - rankOf(b) || sortTasks(a, b); });
   var predsDone = function (t) { return split(t.preds).every(function (p) { var x = byId[p]; return !x || x.status === '完成' || x.status === '待驗收'; }); };
   var doing = mine.filter(function (t) { return t.status === '進行中'; });
   var ready = mine.filter(function (t) { return (t.status === '未開始' || t.status === '暫停') && predsDone(t); });
@@ -65,12 +65,33 @@ function renderMine(c) {
     call('bulkStatus', pmReview.map(function (t) { return t.id; }), '完成').then(function (r) { busy(false); r.tasks.forEach(upsert); applyComputed(r.computed); toast('已確認 ' + r.tasks.length + ' 項'); render(); }).catch(fail);
   });
 }
+function rankOf(t) { return t.rank === undefined || t.rank === null ? 1e9 : t.rank; }
+/** 排序依據的小標籤：趕期限、期限、下游在等 */
+function whyChips(t) {
+  var w = t.why; if (!w) return '';
+  var h = '';
+  var src = w.src && w.src !== 'own' ? '依下游 ' + w.src + (byId[w.src] ? '「' + byId[w.src].title + '」' : '') + ' 的期限往前推算' : '這項的出版日／期限';
+  if (w.due) h += '<span class="wtag ' + (w.tier === 0 ? 'd' : 'i') + '" title="' + esc(src) + '">' + (w.tier === 0 ? '趕期限 ' : '期限 ') + md(w.due) + (w.src && w.src !== 'own' ? '（下游）' : '') + '</span>';
+  if (w.down > 0) h += '<span class="wtag w" title="完成後才能開始的其他人工作：' + w.down + ' 項">' + esc(w.who.slice(0, 3).join('、') + (w.who.length > 3 ? ' 等' : '')) + ' 在等</span>';
+  return h;
+}
+function whyText(t) {
+  var w = t.why; if (!w) return '';
+  var a = [];
+  if (w.tier === 0) a.push('趕期限：要在 ' + md(w.due) + ' 前完成，' + API.urgentDays() + ' 個工作天內就得開始');
+  else if (w.due) a.push('期限 ' + md(w.due));
+  if (w.due && w.src && w.src !== 'own') a.push('期限是依下游 ' + w.src + (byId[w.src] ? '「' + byId[w.src].title + '」' : '') + ' 往前推算');
+  if (w.down > 0) a.push('完成後 ' + w.who.join('、') + ' 的 ' + w.down + ' 項工作才能開始');
+  if (!a.length) a.push('沒有期限、也沒有其他人在等，排在後面');
+  return a.join('；');
+}
 function mineCard(t, lane) {
   var up = canUpdate(t) && !t._help, qty = Number(t.qty) || 1, done = Number(t.doneQty) || 0;
   var h = '<div class="tcard" style="border-left-color:' + pcolor(t.project) + '"><div class="t">' + esc(t.title) + '</div>' +
     '<div class="m"><span>' + esc(projName(t.project)) + (t.group ? '・' + esc(t.group) : '') + '</span><span>' + esc(t.days) + ' 天</span><span>預計 ' + md(t.start) + ' – ' + md(t.end) + '</span>' + (lane === '等你驗收' ? person(t.owner) : '') + '</div>' +
     (t._help ? '<div style="margin-top:6px"><span class="hlp" style="margin:0">協力</span> <span class="faint" style="font-size:12px">負責人：' + esc(t._help) + '，進度由負責人回報</span></div>' : '') +
-    (splitTags(t.tag).length ? '<div style="margin-top:6px">' + splitTags(t.tag).map(function (x) { return tagChip(x); }).join('') + '</div>' : '');
+    (splitTags(t.tag).length ? '<div style="margin-top:6px">' + splitTags(t.tag).map(function (x) { return tagChip(x); }).join('') + '</div>' : '') +
+    ((lane === '可以開始' || lane === '等待前置') && !t._help && whyChips(t) ? '<div style="margin-top:6px">' + whyChips(t) + '</div>' : '');
   (t.warns || []).slice(0, 2).forEach(function (w) { h += '<div style="margin-top:6px"><span class="wtag ' + sev(w) + '">' + esc(w) + '</span></div>'; });
   if (lane === '進行中') h += '<div style="margin-top:8px">' + progBar(t, true) + '</div>';
   if (lane === '等待前置') split(t.preds).forEach(function (p) { var x = byId[p]; if (x && x.status !== '完成' && x.status !== '待驗收') h += '<div class="wait">等 <b>' + esc(x.owner || '未指派') + '</b> 的「' + esc(x.title) + '」，預計 ' + md(x.end) + ' 完成</div>'; });
@@ -125,7 +146,7 @@ function renderPeople(c) {
   var top = 0; layout.forEach(function (L) { L.top = top; L.h = Math.max(48, L.lanes * LH + 10); top += L.h; });
   if (!layout.length) { c.innerHTML = h + '<div class="card empty" style="margin:0 22px"><b>這段期間沒有排程</b>換個時間範圍或專案試試。</div>'; bindPeople(); return; }
   var width = (max - min + 1) * W;
-  h += '<div class="gwrap"><div class="gleft" style="width:210px"><div class="ghead">人員（點名字調整工作順序）</div><div class="glist" id="gList"><div style="height:' + (top + 30) + 'px">';
+  h += '<div class="gwrap"><div class="gleft" style="width:210px"><div class="ghead">人員（點名字看工作順序）</div><div class="glist" id="gList"><div style="height:' + (top + 30) + 'px">';
   layout.forEach(function (L) {
     var pct = L.cap ? L.used / L.cap * 100 : 0;
     h += '<div class="pname" data-p="' + esc(L.p.name) + '" style="height:' + L.h + 'px">' + avatar(L.p.name) + '<div class="who"><b>' + esc(L.p.name) + '</b><span class="hint">未來 30 天 ' + Math.round(L.used * 10) / 10 + ' / ' + L.cap + ' 天</span><div class="load"><i class="' + (pct > 100 ? 'over' : '') + '" style="width:' + Math.min(100, pct) + '%"></i></div></div></div>';
@@ -216,8 +237,7 @@ function drawerBody() {
   var h = '';
   if (!isNew) {
     (t.warns || []).forEach(function (w) {
-      var fix = /^排序衝突/.test(w) && t.conflict && full && t.owner ? '<div style="margin-top:8px"><button class="btn sm" id="fixOrder">把這項移到 ' + esc(t.conflict) + ' 前面</button></div>' : '';
-      h += '<div class="box ' + sev(w) + '">' + esc(w) + fix + '</div>';
+      h += '<div class="box ' + sev(w) + '">' + esc(w) + '</div>';
     });
     if (t.info) h += '<div class="box">' + esc(t.info) + '</div>';
   }
@@ -225,13 +245,14 @@ function drawerBody() {
 
   /* ---- 規劃（PM） ---- */
   h += '<div class="sect"><div class="sect-h">' + (isNew ? '' : '規劃') + (!full && !isNew ? '<span class="faint">由 PM 設定</span>' : '') + '</div><div class="props">';
-  h += '<label>負責</label><div>' + sel('owner', [['', '未指派']].concat(S.data.people.map(function (p) { return [p.name, p.name + (p.role !== '美術' ? '（' + p.role + '）' : '')]; })), full) + '</div>';
+  h += '<label>負責</label><div>' + sel('owner', [['', '未指派']].concat(S.data.people.map(function (p) { return [p.name, p.name + (p.role !== '美術' ? '（' + p.role + '）' : '')]; })), full) + (full ? '<button type="button" class="btn sm" id="findOwner" style="margin-left:6px;white-space:nowrap">找有空的人</button>' : '') + '</div>';
   h += '<label>協力</label><div style="display:block"><input type="hidden" name="helper" value="' + esc(t.helper) + '"><div id="hlpBox"></div><div class="hint" style="margin-top:2px">內部人員會一起被排進時間；外包不影響排程</div></div>';
   h += '<label>天數</label><div>' + inp('days', 'number', full, ' style="max-width:120px"') + '<span class="hint">工作天，可以有小數</span></div>';
   h += '<label>前置工項</label><div class="ac" style="display:block"><div id="predChips"></div>' + (full ? '<input class="field" id="predInput" placeholder="要先完成哪些工作？搜尋名稱或 ID" autocomplete="off" style="margin-top:4px"><div class="list2 hidden" id="predList"></div>' : '') + '</div>';
   h += '<label>出版日／期限</label><div>' + inp('release', 'date', full, ' style="max-width:180px"') + '</div>';
   h += '<label>群組</label><div>' + inp('group', 'text', full, ' list="grpList" placeholder="例如角色名稱或版本"') + '<datalist id="grpList">' + Object.keys(S.data.tasks.reduce(function (m, x) { if (x.project === t.project && x.group) m[x.group] = 1; return m; }, {})).map(function (g) { return '<option value="' + esc(g) + '">'; }).join('') + '</datalist></div>';
   if (!isNew) h += '<label>系統預計</label><div><b>' + md(t.start) + ' – ' + md(t.end) + '</b>' + (t.baseline ? '<span class="faint">基準 ' + md(t.baseline) + '</span>' : '') + (t.slip > 0 ? '<span class="wtag w">晚 ' + t.slip + ' 天</span>' : '') + '</div>';
+  if (!isNew && t.why && (t.status === '未開始' || t.status === '暫停')) h += '<label>排序依據</label><div style="display:block;font-size:13px">' + esc(whyText(t)) + '</div>';
   h += '</div>';
   h += '<details class="more"' + (D.moreOpen ? ' open' : '') + '><summary>更多設定</summary><div class="props">';
   h += '<label>說明</label><div><textarea class="field" name="detail" rows="2"' + (full ? '' : ' disabled') + '>' + esc(t.detail) + '</textarea></div>';
@@ -276,17 +297,8 @@ function drawerBody() {
   if (full) bindPredInput();
   var on = function (id, fn) { var el = $(id); if (el) el.addEventListener('click', fn); };
   on('#dSave', function () { saveDrawer(false); });
-  on('#fixOrder', function () {
-    // 這個人排隊中的工作照目前順序排，把這項移到衝突工項的前面
-    var q = S.data.tasks.filter(function (x) { return x.owner === t.owner && x.mode !== '平行' && (x.status === '未開始' || x.status === '暫停'); })
-      .sort(function (a, b) { return (Number(a.prio) || 0) - (Number(b.prio) || 0) || (a.id < b.id ? -1 : 1); }).map(function (x) { return x.id; });
-    q = q.filter(function (id) { return id !== t.id; });
-    var at = q.indexOf(t.conflict); if (at < 0) { toast('找不到 ' + t.conflict + '，請到人員排程手動調整', true); return; }
-    q.splice(at, 0, t.id);
-    busy(true);
-    call('reorderQueue', t.owner, q).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); toast('已調整 ' + t.owner + ' 的工作順序'); openTask(t.id); render(); }).catch(fail);
-  });
   on('#dSaveNext', function () { saveDrawer(true); });
+  on('#findOwner', function (e) { openFindOwner(e.currentTarget); });
   on('#dDel', function () {
     if (!confirm('刪除「' + t.title + '」？刪除後無法復原。若只是不做了，建議把狀態改成「取消」。')) return;
     busy(true);
@@ -669,30 +681,50 @@ function downloadBulkTemplate() {
 }
 
 function openQueue(name) {
-  var list = S.data.tasks.filter(function (t) { return t.owner === name && t.mode !== '平行' && (t.status === '未開始' || t.status === '暫停'); }).sort(function (a, b) { return (a.prio || 0) - (b.prio || 0); });
-  var editable = list.length && list.every(canEdit);
-  var h = '<h3 style="display:flex;align-items:center;gap:10px">' + avatar(name) + esc(name) + ' 的工作順序</h3><div class="hint">由上到下依序進行（進行中的工作不在這裡）。' + (editable ? '用 ↑ ↓ 調整，儲存後會重算所有人的時程。' : '你沒有調整權限，只能檢視。') + '</div>';
-  h += '<table style="margin-top:12px"><thead><tr><th>#</th><th>工項</th><th>專案</th><th>天數</th><th>預計</th><th></th></tr></thead><tbody id="qBody"></tbody></table>';
-  h += '<div class="mfoot"><a class="btn ghost" href="#/mine/' + encodeURIComponent(name) + '" id="qMine">看他的工作</a>' + (isPM() ? '<button class="btn" id="qLeave">登記休假</button>' : '') + '<span style="flex:1"></span><button class="btn" id="qClose">關閉</button>' + (editable ? '<button class="btn primary" id="qSave">儲存順序</button>' : '') + '</div>';
+  var list = S.data.tasks.filter(function (t) { return t.owner === name && t.mode !== '平行' && (t.status === '未開始' || t.status === '暫停'); }).sort(function (a, b) { return rankOf(a) - rankOf(b) || sortTasks(a, b); });
+  var h = '<h3 style="display:flex;align-items:center;gap:10px">' + avatar(name) + esc(name) + ' 的工作順序</h3><div class="hint">系統自動排序：趕期限的 → 完成後有其他人在等的 → 期限較早的 → 其他。要讓某項提前，請設定它的「出版日／期限」。本人也可以隨時先開始任何一項，或同時進行多項。</div>';
+  h += '<table style="margin-top:12px"><thead><tr><th>#</th><th>工項</th><th>專案</th><th>天數</th><th>預計</th><th>排序依據</th></tr></thead><tbody>';
+  h += list.map(function (t, i) {
+    return '<tr><td>' + (i + 1) + '</td><td><a href="javascript:void 0" data-qo="' + esc(t.id) + '">' + esc(t.title) + '</a>' + ((t.warns || []).length ? ' <span class="wdot ' + worst(t) + '" title="' + esc(t.warns.join('\n')) + '">!</span>' : '') + '<div class="faint" style="font-size:12px">' + (split(t.preds).length ? '要等 ' + split(t.preds).map(function (p) { return byId[p] ? byId[p].title : p; }).join('、') : '') + (t.info ? (split(t.preds).length ? '；' : '') + esc(t.info) : '') + '</div></td><td>' + esc(projName(t.project)) + '</td><td>' + esc(t.days) + '</td><td style="white-space:nowrap">' + md(t.start) + ' – ' + md(t.end) + '</td><td>' + (whyChips(t) || '<span class="faint">—</span>') + '</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="empty">沒有排隊中的工作</td></tr>';
+  h += '</tbody></table>';
+  h += '<div class="mfoot"><a class="btn ghost" href="#/mine/' + encodeURIComponent(name) + '" id="qMine">看他的工作</a>' + (isPM() ? '<button class="btn" id="qLeave">登記休假</button>' : '') + '<span style="flex:1"></span><button class="btn" id="qClose">關閉</button></div>';
   modal(h);
-  var order = list.map(function (t) { return t.id; });
-  var draw = function () {
-    $('#qBody').innerHTML = order.map(function (id, i) {
-      var t = byId[id];
-      return '<tr><td>' + (i + 1) + '</td><td>' + esc(t.title) + ((t.warns || []).length ? ' <span class="wdot ' + worst(t) + '" title="' + esc(t.warns.join('\n')) + '">!</span>' : '') + '<div class="faint" style="font-size:12px">' + (split(t.preds).length ? '要等 ' + split(t.preds).map(function (p) { return byId[p] ? byId[p].title : p; }).join('、') : '') + '</div></td><td>' + esc(projName(t.project)) + '</td><td>' + esc(t.days) + '</td><td style="white-space:nowrap">' + md(t.start) + ' – ' + md(t.end) + '</td><td style="white-space:nowrap">' + (editable ? '<button class="btn sm" data-u="' + i + '">↑</button> <button class="btn sm" data-dn="' + i + '">↓</button>' : '') + '</td></tr>';
-    }).join('') || '<tr><td colspan="6" class="empty">沒有排隊中的工作</td></tr>';
-    $$('[data-u]').forEach(function (b) { b.addEventListener('click', function () { var i = +b.dataset.u; if (i > 0) { var x = order[i]; order[i] = order[i - 1]; order[i - 1] = x; draw(); } }); });
-    $$('[data-dn]').forEach(function (b) { b.addEventListener('click', function () { var i = +b.dataset.dn; if (i < order.length - 1) { var x = order[i]; order[i] = order[i + 1]; order[i + 1] = x; draw(); } }); });
-  };
-  draw();
+  $$('[data-qo]').forEach(function (a) { a.addEventListener('click', function () { closeModal(); openTask(a.dataset.qo); }); });
   $('#qClose').addEventListener('click', closeModal);
   $('#qMine').addEventListener('click', closeModal);
   var ql = $('#qLeave'); if (ql) ql.addEventListener('click', function () { openLeave(name); });
-  var qs = $('#qSave');
-  if (qs) qs.addEventListener('click', function () {
-    busy(true);
-    call('reorderQueue', name, order).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已更新順序並重算時程'); render(); }).catch(fail);
-  });
+}
+
+/** 換負責人：列出每個人接手後這項何時完成、會讓他手上幾項延後 */
+function openFindOwner(btn) {
+  var o = formValues(); o.id = D.cur.id;
+  var pop = openPop(btn, '<div class="faint" style="padding:12px">計算中…</div>', Math.min(600, window.innerWidth - 16));
+  pop.style.maxWidth = 'none'; pop.style.maxHeight = '80vh'; pop.style.padding = '10px';
+  setTimeout(function () {
+    call('suggestOwners', o).then(function (rows) {
+      if (!pop.isConnected) return;
+      var showAll = !!openFindOwner.all;
+      var list = rows.filter(function (r) { return showAll || r.role === '美術' || r.current; });
+      var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><b>誰接手最快完成？</b><label class="faint" style="margin-left:auto;font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="foAll"' + (showAll ? ' checked' : '') + '>也列出 PM／管理員</label></div><div class="hint" style="margin-bottom:6px">依接手後這項的預計完成日排序。「他的工作延後」是他手上原本的工作會被往後推幾項。</div><div style="max-height:360px;overflow:auto"><table class="grid2" style="width:100%;font-size:13px"><thead><tr><th>人員</th><th style="white-space:nowrap">這項預計</th><th style="white-space:nowrap">四週負載</th><th style="white-space:nowrap">最早空檔</th><th style="white-space:nowrap">他的工作延後</th></tr></thead><tbody>';
+      h += list.map(function (r) {
+        var dl = r.delayed ? r.delayed + ' 項，最多 ' + r.maxDelay + ' 天' + (r.late ? ' <span class="late">' + r.late + ' 項超過出版日</span>' : '') : '<span class="faint">不影響</span>';
+        var lc = r.load >= 90 ? 'color:var(--danger)' : r.load >= 60 ? 'color:var(--warn)' : '';
+        return '<tr data-pick="' + esc(r.name) + '" style="cursor:pointer' + (r.current ? ';background:var(--accent-soft)' : '') + '"><td style="white-space:nowrap">' + esc(r.name) + (r.role !== '美術' ? '<span class="faint">（' + esc(r.role) + '）</span>' : '') + (r.current ? ' <span class="faint">目前</span>' : '') + '</td><td style="white-space:nowrap">' + md(r.start) + ' – <b>' + md(r.end) + '</b></td><td style="' + lc + '">' + r.load + '%</td><td>' + (r.free ? md(r.free) : '—') + '</td><td>' + dl + '</td></tr>';
+      }).join('') || '<tr><td colspan="5" class="empty">沒有人員</td></tr>';
+      h += '</tbody></table></div><div class="hint" style="margin-top:6px">點一列就會換成那個人，按「儲存」才會生效。</div>';
+      pop.innerHTML = h;
+      $('#foAll', pop).addEventListener('change', function (e) { openFindOwner.all = e.target.checked; openFindOwner(btn); });
+      var pr = pop.getBoundingClientRect(); if (pr.right > window.innerWidth - 8) pop.style.left = Math.max(8, window.innerWidth - pop.offsetWidth - 8) + 'px'; if (pr.bottom > window.innerHeight - 8) pop.style.top = Math.max(8, window.innerHeight - pop.offsetHeight - 8) + 'px';
+      $$('[data-pick]', pop).forEach(function (tr) {
+        tr.addEventListener('click', function () {
+          var sel = $('#dBody [name="owner"]'); if (!sel) return;
+          sel.value = tr.dataset.pick; sel.dispatchEvent(new Event('change', { bubbles: true }));
+          closePop(); toast('負責人改成 ' + tr.dataset.pick + '，記得按儲存');
+        });
+      });
+    }).catch(function (e) { if (pop.isConnected) pop.innerHTML = '<div class="box d">' + esc(e.message) + '</div>'; });
+  }, 30);
 }
 
 function openLeave(name) {
@@ -808,10 +840,11 @@ function ro() { return isAdmin() ? '' : '<div class="box">只有管理員能修�
 
 function setGeneral(box) {
   var d = API.adminData(), get = function (k) { var r = d.settings.filter(function (x) { return x.key === k; })[0]; return r ? r.value : ''; };
-  var known = { '管理員': 1, '美術可見範圍': 1, '考核年度起始月': 1, '封存紀錄': 1, '提醒信模式': 1, '提醒間隔天數': 1 };
+  var known = { '管理員': 1, '美術可見範圍': 1, '趕期限天數': 1, '考核年度起始月': 1, '封存紀錄': 1, '提醒信模式': 1, '提醒間隔天數': 1 };
   var h = '<div class="card pad" style="max-width:720px"><div class="form" style="grid-template-columns:1fr">';
   h += '<label>管理員 Email<textarea class="field" id="sgAdmins" rows="3" placeholder="一行一個">' + esc(get('管理員').split(/[\s,，;；]+/).filter(Boolean).join('\n')) + '</textarea><span class="hint">這些人擁有全部權限。也可以在「人員」把某人的角色設成「管理員」。</span></label>';
   h += '<label>美術可以看到哪些工項<select class="field" id="sgScope" style="max-width:320px">' + [['全部', '全部專案'], ['參與的專案', '自己有工項的專案'], ['自己的工項', '只有自己的工項']].map(function (o) { return '<option value="' + o[0] + '"' + (get('美術可見範圍') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select><span class="hint">PM 和管理員一律看得到全部。</span></label>';
+  h += '<label>趕期限天數<input class="field" type="number" min="0" step="1" id="sgUrg" style="max-width:120px" value="' + esc(get('趕期限天數') || '10') + '"><span class="hint">離期限只剩這麼多個工作天就得開始的工項，會排到每個人隊伍的最前面。</span></label>';
   h += '</div><div class="mfoot" style="justify-content:flex-start"><button class="btn primary" id="sgSave">儲存設定</button></div></div>';
   var others = d.settings.filter(function (x) { return !known[x.key]; });
   if (others.length) h += '<div class="card pad" style="max-width:720px;margin-top:14px"><b>其他設定</b><table class="grid2" style="margin-top:8px"><tbody>' + others.map(function (r, i) { return '<tr><td style="width:160px">' + esc(r.key) + '</td><td><input class="field" data-ok="' + i + '" value="' + esc(r.value) + '"></td><td style="width:80px"><button class="btn sm" data-osave="' + i + '">儲存</button></td></tr>'; }).join('') + '</tbody></table></div>';
@@ -823,7 +856,8 @@ function setGeneral(box) {
     var mp = d.people.filter(function (p) { return p.email === S.data.me.email; })[0];
     if (list.indexOf(S.data.me.email) < 0 && !(mp && mp.role === '管理員') && !confirm('名單裡沒有你自己（' + S.data.me.email + '），儲存後你會失去管理員權限。確定嗎？')) return;
     busy(true);
-    call('saveSetting', '管理員', list.join(', ')).then(function () { return call('saveSetting', '美術可見範圍', $('#sgScope').value); })
+    var urg = String(Math.max(0, parseInt($('#sgUrg').value, 10) || 0));
+    call('saveSetting', '管理員', list.join(', ')).then(function () { return call('saveSetting', '美術可見範圍', $('#sgScope').value); }).then(function () { return call('saveSetting', '趕期限天數', urg); })
       .then(function () { busy(false); adminRefresh(); toast('已儲存設定'); }).catch(fail);
   });
   $$('[data-osave]', box).forEach(function (b) {
@@ -1412,7 +1446,7 @@ var HELP = {
     ['登入', ['用<b>公司 Google 帳號</b>登入。看到「沒有使用權限」時，請管理員在人員名單填上你的 Email。', '手機也能用，介面會自動調整。左下角的半圓圖示可以切換淺色、深色主題。']],
     ['每天要做的事：在「我的工作」回報進度', ['左側點「<b>我的工作</b>」，你的工作會分成：<b>進行中</b>、<b>可以開始</b>（前置都完成了）、<b>等待前置</b>（還在等別人）、<b>已送驗收</b>。', '開始做某項工作 → 按卡片上的「<b>開始</b>」。系統會自動記下實際開始日。', '做的過程中按「<b>回報進度</b>」填完成度（例如 30%），主管在首頁就看得到誰落後；系統也會用剩下的量重算完成日。', '做完 → 按「<b>送驗收</b>」。系統會記下實際完成日，PM 確認後會變成「完成」；如果被退回，會回到「進行中」。', '一次只開始你真的在做的工作，排程才會準。']],
     ['需要補充或修正時', ['點卡片上的「<b>詳細</b>」打開工項面板，在「進度」區可以改：狀態、完成數量、實際開始、實際完成、備註。', '<b>完成度</b>：做到幾成就填幾成。進度條上的直線是「照計畫今天應該到哪裡」，綠條在直線左邊很多就代表落後。', '忘了按開始或日期記錯，直接改實際日期，順便在備註寫原因。', '工項名稱、天數、負責人、前置這些由 PM 安排，你這邊會是唯讀；有問題請找 PM。', '所有下拉選單都可以直接打字篩選。']],
-    ['預計日期是怎麼來的？', ['你<b>不用</b>自己填預計日期。系統會依天數、你的排隊順序、前置工項、假日和休假自動計算，任何人改了東西都會即時重算。', '別人的修改會即時出現在你的畫面上，不用重新整理。']],
+    ['預計日期是怎麼來的？', ['你<b>不用</b>自己填預計日期。系統會依天數、工作順序、前置工項、假日和休假自動計算，任何人改了東西都會即時重算。', '別人的修改會即時出現在你的畫面上，不用重新整理。']],
     ['工項上的警示', ['<span class="wtag d">超過出版日</span>：照目前進度會趕不上期限。', '<span class="wtag w">進度落後</span>：已經過了預計完成日還沒送驗收。', '<span class="wtag w">比基準晚</span>：比 PM 一開始規劃的完成日晚。', '看到警示不用緊張，PM 也看得到，必要時會調整排程。']],
     ['查看全部排程', ['「<b>人員排程</b>」：用時間軸看每個人接下來的工作和休假。', '左側「<b>專案</b>」：看整個專案的工項表格和甘特圖。上方的年度選單可以切換考核年度。']],
     ['寫自評：下載年度工作排程', ['「我的工作」右上角按「<b>下載年度工作</b>」，選年度後下載 Excel。', '按月份列出你這段期間參與的所有工項（包含已封存的），格式和以前的個人排程表一樣。']]
@@ -1421,7 +1455,7 @@ var HELP = {
     ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。']],
     ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、負責、天數；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。']],
     ['在表格上編輯', ['直接點負責、狀態、天數、前置、出版日的格子就能改，存檔是自動的。', '右上「<b>欄位</b>」可以調整欄位順序、寬度和要不要顯示；也可以直接在表頭拖曳欄位、拉右邊緣調寬度。設定只存在你這台電腦。', '滑鼠停在工項名稱上，會顯示它的說明。', '勾選多筆後，下方會出現批次列：改狀態、指派給、刪除。先勾一項、再按住 <b>Shift</b> 勾另一項，可以把中間的工項一次勾起來。', '上方可以篩選負責人、群組、狀態、「只看有警示」，也可以切換考核年度。']],
-    ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '<b>協力</b>：可以複選內部人員和外包。內部人員會跟負責人一起被排進時間（他的其他工作會往後排）；外包只是記錄，不影響排程。', '<b>標籤</b>：一個工項可以有多個標籤，用逗號分開。輸入時會列出相似的舊標籤，選舊的可以避免同一件事有好幾種寫法；同一個標籤在各處都是同一個顏色。主表格上方可以用標籤篩選。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '「<b>人員排程</b>」的時間軸也可以直接拖曳：拖整條改開始日、拉右邊緣改天數，方便一次看所有人的負載再調整。', '同一個人的工作順序：「人員排程」點人名，用上下箭頭調整排隊順序。']],
+    ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '<b>協力</b>：可以複選內部人員和外包。內部人員會跟負責人一起被排進時間（他的其他工作會往後排）；外包只是記錄，不影響排程。', '<b>標籤</b>：一個工項可以有多個標籤，用逗號分開。輸入時會列出相似的舊標籤，選舊的可以避免同一件事有好幾種寫法；同一個標籤在各處都是同一個顏色。主表格上方可以用標籤篩選。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '「<b>人員排程</b>」的時間軸也可以直接拖曳：拖整條改開始日、拉右邊緣改天數，方便一次看所有人的負載再調整。', '<b>工作順序</b>由系統自動決定，不看建立順序：① 趕期限的（離出版日／期限只剩幾個工作天就得開始，天數在「設定 → 一般設定」調整）→ ② 完成後有其他人的工作在等的 → ③ 期限較早的（沒填期限的工作，會依下游工作的期限往前推算）→ ④ 其他。想讓某項提前，就設定它的期限。', '排第一的工作在等前置時，系統會把空檔內做得完的其他工作先排進來，不會讓排第一的工作晚開始。', '這只是預設建議：本人可以隨時先開始任何一項，也可以同時進行好幾項。「人員排程」點人名可以看每個人的順序和排序依據。', '<b>換負責人</b>：工項詳細的負責旁按「找有空的人」，會列出每個人接手後這項何時完成、四週負載、最早空檔，以及會讓他手上幾項工作延後。']],
     ['驗收', ['美術送驗收後，你的「我的工作」最上面會出現「<b>等你驗收</b>」，側欄也會顯示數字。', '確認沒問題按「確認完成」；需要修改按「退回修改」，工項會回到進行中，完成度重新回報。', '管理員可以在「設定 → 人員」幫你設定<b>管理專案</b>，設定後只會收到那些專案的驗收。']],
     ['休假與人力', ['「人員排程」右上「<b>登記休假</b>」，休假期間不會排工作，後面的工作會自動往後推。', '「下載個人排程表」可以一次下載所有人的排程 Excel，也能快速選考核年度。']],
     ['每天花一分鐘看首頁', ['首頁會列出各專案進度、所有警示，以及七天內預計完成的工項。', '每一項都有完成度進度條：直線是照計畫應有的進度，條變紅代表比應有進度少 15% 以上。「未回報」可以提醒負責人更新。']]

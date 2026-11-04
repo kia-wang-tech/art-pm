@@ -533,3 +533,4 @@ body.colresize { cursor: col-resize; user-select: none; }
 .pop.flexpop #mpL { flex: 1 1 auto; }
 .pop .xrm { padding: 0 8px; height: 24px; flex: none; }
 .pop .xrm.danger { color: var(--danger); font-weight: 600; }
+.wtag.i { background: var(--accent-soft); color: var(--accent); }
