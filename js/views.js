@@ -792,8 +792,9 @@ function openProject(p) {
   h += '<label>開始日<input class="field" type="date" id="pjStart" value="' + esc(p.start) + '"></label><label>目標日<input class="field" type="date" id="pjTarget" value="' + esc(p.target) + '"></label>';
   h += '<label class="full">備註<input class="field" id="pjNote" value="' + esc(p.note) + '"></label></div>';
   if (!isNew) h += '<div class="box" style="margin-top:14px"><b>重設基準</b>：把目前的預計完成日存成基準，之後延誤會顯示「比基準晚 N 天」。建議在專案計畫確定、或每個版本開始時做一次。<div style="margin-top:8px"><button class="btn sm" id="pjBase">重設基準</button></div></div>';
-  h += '<div class="mfoot"><button class="btn" id="pjC">取消</button><button class="btn primary" id="pjGo">' + (isNew ? '建立專案' : '儲存') + '</button></div>';
+  h += '<div class="mfoot">' + (!isNew && p.canEdit ? '<button class="btn danger" id="pjDel">刪除專案</button>' : '') + '<span style="flex:1"></span><button class="btn" id="pjC">取消</button><button class="btn primary" id="pjGo">' + (isNew ? '建立專案' : '儲存') + '</button></div>';
   modal(h);
+  var dl = $('#pjDel'); if (dl) dl.addEventListener('click', function () { openDeleteProject(p); });
   var icon = p.icon || '';
   var showIc = function () { $('#pjIcPrev').innerHTML = picon({ id: p.id || '', name: $('#pjName').value || '?', icon: icon, color: $('#pjColor').value }, 40); };
   showIc();
@@ -822,6 +823,33 @@ function openProject(p) {
     busy(true);
     call('resetBaseline', p.id).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已重設 ' + r.count + ' 個工項的基準'); render(); }).catch(fail);
   });
+}
+
+/** 刪除專案：第二道確認，要輸入專案名稱 */
+function openDeleteProject(p) {
+  busy(true);
+  call('countProjectTasks', p.id).then(function (n) {
+    busy(false);
+    var h = '<h3 style="color:var(--danger)">刪除專案「' + esc(p.name) + '」？</h3>' +
+      '<div class="box d">會<b>永久刪除</b>這個專案和它的 <b>' + n + '</b> 個工項（包含已封存的），無法從網站復原。其他專案把這些工項設為前置的，前置也會一併移除。<br>需要時只能用每日備份整份還原，建議先下載備份。</div>' +
+      '<div class="form" style="grid-template-columns:1fr;margin-top:12px"><label>請輸入專案名稱「' + esc(p.name) + '」確認<input class="field" id="pdName" autocomplete="off"></label></div>' +
+      '<div class="mfoot"><button class="btn" id="pdC">取消</button><button class="btn primary" id="pdGo" disabled style="background:var(--danger);border-color:var(--danger)">永久刪除</button></div>';
+    modal(h);
+    var inp = $('#pdName'), go2 = $('#pdGo');
+    inp.addEventListener('input', function () { go2.disabled = inp.value.trim() !== p.name; });
+    setTimeout(function () { inp.focus(); }, 50);
+    $('#pdC').addEventListener('click', closeModal);
+    go2.addEventListener('click', function () {
+      if (inp.value.trim() !== p.name) return;
+      busy(true);
+      call('deleteProject', p.id, p.name).then(function (r) {
+        busy(false); closeModal();
+        S.data = API.refresh(S.data.history); index();
+        toast('已刪除專案「' + p.name + '」和 ' + r.count + ' 個工項');
+        go('home');
+      }).catch(fail);
+    });
+  }).catch(fail);
 }
 
 /* ---------------- 設定 ---------------- */
@@ -1452,7 +1480,7 @@ var HELP = {
     ['寫自評：下載年度工作排程', ['「我的工作」右上角按「<b>下載年度工作</b>」，選年度後下載 Excel。', '按月份列出你這段期間參與的所有工項（包含已封存的），格式和以前的個人排程表一樣。']]
   ],
   'PM': [
-    ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。']],
+    ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。', '專案設定左下角的「<b>刪除專案</b>」會連同所有工項（含已封存）永久刪除，要輸入專案名稱確認。只是結束的專案請改成「封存」。']],
     ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、負責、天數；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。']],
     ['在表格上編輯', ['直接點負責、狀態、天數、前置、出版日的格子就能改，存檔是自動的。', '右上「<b>欄位</b>」可以調整欄位順序、寬度和要不要顯示；也可以直接在表頭拖曳欄位、拉右邊緣調寬度。設定只存在你這台電腦。', '滑鼠停在工項名稱上，會顯示它的說明。', '勾選多筆後，下方會出現批次列：改狀態、指派給、刪除。先勾一項、再按住 <b>Shift</b> 勾另一項，可以把中間的工項一次勾起來。', '上方可以篩選負責人、群組、狀態、「只看有警示」，也可以切換考核年度。']],
     ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '<b>協力</b>：可以複選內部人員和外包。內部人員會跟負責人一起被排進時間（他的其他工作會往後排）；外包只是記錄，不影響排程。', '<b>標籤</b>：一個工項可以有多個標籤，用逗號分開。輸入時會列出相似的舊標籤，選舊的可以避免同一件事有好幾種寫法；同一個標籤在各處都是同一個顏色。主表格上方可以用標籤篩選。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。', '「<b>人員排程</b>」的時間軸也可以直接拖曳：拖整條改開始日、拉右邊緣改天數，方便一次看所有人的負載再調整。', '<b>工作順序</b>由系統自動決定，不看建立順序：① 趕期限的（離出版日／期限只剩幾個工作天就得開始，天數在「設定 → 一般設定」調整）→ ② 完成後有其他人的工作在等的 → ③ 期限較早的（沒填期限的工作，會依下游工作的期限往前推算）→ ④ 其他。想讓某項提前，就設定它的期限。', '排第一的工作在等前置時，系統會把空檔內做得完的其他工作先排進來，不會讓排第一的工作晚開始。', '這只是預設建議：本人可以隨時先開始任何一項，也可以同時進行好幾項。「人員排程」點人名可以看每個人的順序和排序依據。', '<b>換負責人</b>：工項詳細的負責旁按「找有空的人」，會列出每個人接手後這項何時完成、四週負載、最早空檔，以及會讓他手上幾項工作延後。']],

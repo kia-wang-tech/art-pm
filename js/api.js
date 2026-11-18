@@ -591,6 +591,26 @@ var API = (function () {
   }
   function refresh(history) { compute(); return snapshot(history); }
 
+  /** 專案的工項數（含已封存），刪除前確認用 */
+  function countProjectTasks(id) {
+    return sb.from('tasks').select('id', { count: 'exact', head: true }).eq('project', id).then(function (res) { if (res.error) throw res.error; return res.count || 0; }).catch(function (e) { throw err(e); });
+  }
+  /** 刪除專案，連同所有工項（含已封存）；confirmName 要和專案名稱一模一樣 */
+  function deleteProject(id, confirmName) {
+    return sb.rpc('delete_project', { p_id: id, p_confirm: confirmName }).then(function (res) {
+      var n = chk(res);
+      cache.tasks.filter(function (t) { return t.project === id; }).forEach(function (t) { dropTask(t.id); });
+      cache.tasks.forEach(function (t) {
+        var ps = split(t.preds), kept = ps.filter(function (x) { return cache.byId[x]; });
+        if (kept.length !== ps.length) t.preds = kept.join(', ');
+      });
+      cache.projects = cache.projects.filter(function (p) { return p.id !== id; });
+      compute();
+      return { count: n };
+    }).catch(function (e) { throw err(e); });
+  }
+
+
   function saveSetting(key, value) {
     key = String(key || '').trim();
     if (!key) return Promise.reject(new Error('請填項目名稱。'));
@@ -1010,7 +1030,7 @@ var API = (function () {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
-    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), resetBaseline: mine(resetBaseline),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
