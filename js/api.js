@@ -629,7 +629,7 @@ var API = (function () {
     try {
       rows.forEach(function (r, i) {
         if (r.owner && r.owner !== '__auto' && !names[r.owner]) throw new Error('第 ' + (i + 1) + ' 列：「人員」名單裡沒有「' + r.owner + '」。');
-        if (r.category && !(cache.categories || []).some(function (c) { return c.name === r.category; })) throw new Error('第 ' + (i + 1) + ' 列：沒有「' + r.category + '」這個分類，請先到「設定 → 分類」新增。');
+        if (r.category && !(cache.categories || []).some(function (c) { return c.name === r.category; })) throw new Error('第 ' + (i + 1) + ' 列：沒有「' + r.category + '」這個分類，請先到「設定 → 工項分類」新增。');
         split(r.preds).forEach(function (p) { if (!/^#\d+$/.test(p) && !cache.byId[p]) throw new Error('第 ' + (i + 1) + ' 列：前置 ' + p + ' 不存在。'); });
       });
     } catch (e) { return Promise.reject(e); }
@@ -947,8 +947,8 @@ var API = (function () {
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
     leaves: ['休假', { person: '人員', start_date: '開始日', end_date: '結束日', days: '天數', type: '類型', note: '說明' }],
     templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式', category: '分類' }],
-    categories: ['分類', { name: '名稱', sort: '排序', active: '使用中', note: '說明' }],
-    person_types: ['人員工項', { person: '人員', category: '分類', level: '等級', days: '天數', note: '備註' }],
+    categories: ['分類', { name: '名稱', sort: '排序', active: '使用中' }],
+    person_types: ['人員工項', { person: '人員', category: '分類', level: '等級', days: '天數' }],
     settings: ['設定', { key: '項目', value: '值', note: '說明' }]
   };
   var DATE_COLS = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1, start: 1, target: 1, day: 1, start_date: 1, end_date: 1 };

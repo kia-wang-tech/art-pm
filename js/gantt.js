@@ -71,7 +71,7 @@ function renderGantt(c) {
   bindGanttDrag($('#gBody'));
   highlight();
 }
-/** 工項長條上標出負責人／內部協力在這段期間的休假日（只顯示「休假」，不顯示假別） */
+/** 工項長條上標出負責人／內部協力在這段期間的休假日（滑鼠移上去顯示人員與假別） */
 function leaveSpans(t) {
   if (t.mode === '平行' || !t.start || !t.end) return [];
   var who = [t.owner].concat(Engine.splitNames(t.helper).filter(isStaff)).filter(Boolean), a0 = dn(t.start), b0 = dn(t.end), out = [];
@@ -81,12 +81,12 @@ function leaveSpans(t) {
     for (var d = a; d <= b; d++) {
       if (isOff(d)) continue;
       var e = d; while (e + 1 <= b && !isOff(e + 1)) e++;
-      out.push({ person: l.person, a: d, b: e }); d = e;
+      out.push({ person: l.person, type: l.type || '休假', a: d, b: e }); d = e;
     }
   });
   return out;
 }
-function leaveText(t) { var sp = leaveSpans(t); return sp.length ? '\n休假：' + sp.map(function (x) { return x.person + ' ' + md(ds(x.a)) + (x.b > x.a ? '–' + md(ds(x.b)) : ''); }).join('、') : ''; }
+function leaveText(t) { var sp = leaveSpans(t); return sp.length ? '\n請假：' + sp.map(function (x) { return x.person + ' ' + x.type + ' ' + md(ds(x.a)) + (x.b > x.a ? '–' + md(ds(x.b)) : ''); }).join('、') : ''; }
 function leaveMarks(t, top, x, W) {
   return leaveSpans(t).map(function (sp) { return '<div class="gleave" style="left:' + x(sp.a) + 'px;width:' + ((sp.b - sp.a + 1) * W - 2) + 'px;top:' + top + 'px"></div>'; }).join('');
 }

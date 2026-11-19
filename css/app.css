@@ -536,3 +536,20 @@ body.colresize { cursor: col-resize; user-select: none; }
 .wtag.i { background: var(--accent-soft); color: var(--accent); }
 /* 專案甘特圖：工項長條上的休假日 */
 .gleave { position: absolute; height: 22px; z-index: 5; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, rgba(0,0,0,.38) 0 3px, rgba(255,255,255,.55) 3px 6px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+/* 設定 → 工項分類：分類一列，右邊是人員卡片 */
+.cattbl td { vertical-align: top; }
+.cattbl tr.off td:first-child { opacity: .6; }
+.skcards { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.skcard { border: 1px solid var(--line); border-left: 4px solid var(--ink3); border-radius: 8px; padding: 6px 8px; background: var(--surface); min-width: 168px; }
+.skcard.lv1 { border-left-color: var(--accent); }
+.skcard.lv2 { border-left-color: var(--warn); }
+.skcard.lv3 { border-left-color: var(--ink3); }
+.skcard .skn { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.skcard .skn b { flex: 1; font-weight: 600; }
+.skcard .skx { border: 0; background: none; color: var(--ink3); cursor: pointer; padding: 0 2px; font-size: 12px; }
+.skcard .skx:hover { color: var(--danger); }
+.skcard .skf { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 12px; }
+.skcard .skf select { width: 82px; padding: 2px 6px; height: 28px; }
+.skcard .skf input { width: 56px; padding: 2px 6px; height: 28px; }
+.skadd { width: 40px; min-height: 40px; align-self: center; border-radius: 50%; border: 2px dashed var(--line); background: none; color: var(--ink3); font-size: 20px; cursor: pointer; }
+.skadd:hover { border-color: var(--accent); color: var(--accent); }

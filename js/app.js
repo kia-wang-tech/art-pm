@@ -960,7 +960,7 @@ function popStatus(anchor, t, cb) {
 }
 function popCategory(anchor, current, cb) {
   var list = catList(current);
-  if (!list.length) { toast('還沒有分類，請管理員到「設定 → 分類」建立。', true); return; }
+  if (!list.length) { toast('還沒有分類，請管理員到「設定 → 工項分類」建立。', true); return; }
   var p = openPop(anchor, '<input class="field" placeholder="搜尋分類" id="popQ"><div id="popL"></div>', 220);
   var hi = 0, shown = [];
   var draw = function () {
@@ -1058,7 +1058,7 @@ function renderBulkBar() {
   var ids = Object.keys(S.picked).filter(function (id) { return byId[id]; });
   if (!ids.length || S.route.view !== 'board') return;
   var bar = document.createElement('div'); bar.className = 'bulkbar';
-  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm" id="bkAuto" title="依分類與人員工項，重新自動分配未開始的工項">自動指派</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
+  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm" id="bkAuto" title="依工項分類的人員設定，重新自動分配未開始的工項">自動指派</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
   document.body.appendChild(bar);
   var tasks = ids.map(function (id) { return byId[id]; });
   var editable = tasks.filter(canEdit);
@@ -1078,7 +1078,7 @@ function renderBulkBar() {
   $('#bkAuto').addEventListener('click', function () {
     var ids = editable.filter(function (t) { return t.status === '未開始' || t.status === '暫停'; }).map(function (t) { return t.id; });
     if (!ids.length) { toast('只會重新分配「未開始」或「暫停」的工項', true); return; }
-    if (!confirm('依分類和人員工項，重新自動分配選取的 ' + ids.length + ' 個未開始工項？已手動調整過的天數會保留。')) return;
+    if (!confirm('依工項分類的人員設定，重新自動分配選取的 ' + ids.length + ' 個未開始工項？已手動調整過的天數會保留。')) return;
     busy(true);
     call('autoAssignTasks', ids).then(function (r) {
       busy(false); r.tasks.forEach(upsert); applyComputed(r.computed); S.picked = {}; render();
