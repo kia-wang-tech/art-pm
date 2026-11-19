@@ -37,7 +37,7 @@ function toast(msg, err) {
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
-var WRITE_FNS = { deleteProject: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
+var WRITE_FNS = { deleteProject: 1, saveCategory: 1, deleteCategory: 1, savePersonTypes: 1, deletePersonType: 1, autoAssignTasks: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
   archivePeriod: 1, unarchivePeriod: 1, saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, saveDays: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
 var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
@@ -151,6 +151,39 @@ function tagColorOf(name) {
   return hash(name) % 12;
 }
 function tagChip(name, extra) { return '<span class="tagc tg' + tagColorOf(name) + '">' + esc(name) + (extra ? ' ' + extra : '') + '</span>'; }
+/* ---------- 分類與人員工項 ---------- */
+var LV_NAME = { 1: '主要', 2: '次要', 3: '可支援' };
+function catList(cur) { return (S.data.categories || []).filter(function (c) { return c.active || c.name === cur; }).map(function (c) { return c.name; }); }
+function hasCats() { return (S.data.categories || []).length > 0; }
+function skillsOf(cat) { return (S.data.skills || {})[cat] || []; }
+function skillOf(name, cat) { var x = skillsOf(cat).filter(function (k) { return k.person === name; })[0]; return x || null; }
+function skillLabel(k) { return LV_NAME[k.level] + (k.days !== null && k.days !== undefined ? '・' + k.days + ' 天' : ''); }
+/** 負責人下拉選單：自動指派 → 支援這個分類的人 →（顯示全部人員）→ 未指派 */
+function ownerOptionsHtml(cat, current, showAll) {
+  var sk = skillsOf(cat), names = {}, h = '<option value="__auto"' + (current === '__auto' ? ' selected' : '') + '>自動指派</option>';
+  if (sk.length) {
+    h += '<optgroup label="支援「' + esc(cat) + '」的人員">' + sk.map(function (k) { names[k.person] = 1; return '<option value="' + esc(k.person) + '"' + (k.person === current ? ' selected' : '') + '>' + esc(k.person) + '（' + skillLabel(k) + '）</option>'; }).join('') + '</optgroup>';
+  }
+  var others = S.data.people.filter(function (p) { return !names[p.name] && (showAll || !sk.length || p.name === current); });
+  if (others.length) h += '<optgroup label="' + (sk.length ? '其他人員' : (cat ? '還沒有人設定支援這個分類' : '全部人員')) + '">' + others.map(function (p) { return '<option value="' + esc(p.name) + '"' + (p.name === current ? ' selected' : '') + '>' + esc(p.name) + (p.role !== '美術' ? '（' + p.role + '）' : '') + '</option>'; }).join('') + '</optgroup>';
+  if (sk.length && !showAll) h += '<option value="__all">顯示全部人員…</option>';
+  h += '<option value=""' + (current === '' ? ' selected' : '') + '>未指派</option>';
+  return h;
+}
+/** 換負責人時的新天數：原天數是預設值（未指派或等於原負責人的預設天數）才換成新負責人的預設天數；否則回傳 null（維持） */
+function daysForOwner(t, newOwner, days) {
+  var cat = t.category, nk = skillOf(newOwner, cat);
+  if (!nk || nk.days === null || nk.days === undefined) return null;
+  var cur = days === undefined ? t.days : days, ok = skillOf(t.owner, cat);
+  if (!t.owner || (ok && ok.days !== null && Number(cur) === Number(ok.days))) return Number(nk.days) === Number(cur) ? null : nk.days;
+  return null;
+}
+function autoResultModal(title, results) {
+  modal('<h3>' + esc(title) + '</h3><div class="tablewrap" style="max-height:60vh"><table><thead><tr><th>工項</th><th>原負責</th><th>自動指派</th><th>原因</th></tr></thead><tbody>' + results.map(function (r) {
+    return '<tr><td>' + esc(r.title) + ' <span class="faint">' + esc(r.id) + '</span></td><td>' + esc(r.from || '未指派') + '</td><td><b>' + esc(r.owner || '—') + '</b></td><td class="faint" style="font-size:12px">' + esc(r.reason) + '</td></tr>';
+  }).join('') + '</tbody></table></div><div class="mfoot"><button class="btn primary" id="arOk">好</button></div>');
+  $('#arOk').addEventListener('click', closeModal);
+}
 function pmList(p) { return String((p && p.pm) || '').split(/\s*[,，、;；]\s*/).filter(Boolean); }
 function managedBy(name) { return S.data.projects.filter(function (p) { return pmList(p).indexOf(name) >= 0; }).map(function (p) { return p.id; }); }
 /* 等你驗收：有設定管理專案的人只收到那些專案；沒設定的照權限收到全部 */
@@ -506,27 +539,30 @@ function filtered(list) {
     if (S.status && t.status !== S.status) return false;
     if (S.group && t.group !== S.group) return false;
     if (S.tag && splitTags(t.tag).indexOf(S.tag) < 0) return false;
+    if (S.cat && (S.cat === '（未設定）' ? t.category : t.category !== S.cat)) return false;
     if (S.onlyWarn && !(t.warns || []).length) return false;
-    if (q && (t.id + ' ' + t.title + ' ' + t.detail + ' ' + t.group + ' ' + t.owner + ' ' + t.helper + ' ' + t.tag + ' ' + t.code).toLowerCase().indexOf(q) < 0) return false;
+    if (q && (t.id + ' ' + t.title + ' ' + t.detail + ' ' + t.group + ' ' + t.owner + ' ' + t.helper + ' ' + t.tag + ' ' + t.code + ' ' + (t.category || '')).toLowerCase().indexOf(q) < 0) return false;
     return true;
   });
 }
 /* 切換專案或資料變動後，篩選值如果在這個專案已經不存在就清掉（否則下拉選單顯示「所有…」卻篩不出東西） */
 function filterOptions(pid) {
-  var owners = {}, groups = {}, tags = {};
+  var owners = {}, groups = {}, tags = {}, cats = {};
   projectTasks(pid).forEach(function (t) {
+    cats[t.category || '（未設定）'] = 1;
     if (t.owner) owners[t.owner] = 1;
     Engine.splitNames(t.helper).forEach(function (n) { owners[n] = owners[n] || 2; });
     if (t.group) groups[t.group] = 1;
     splitTags(t.tag).forEach(function (x) { tags[x] = 1; });
   });
-  return { owners: owners, groups: groups, tags: tags };
+  return { owners: owners, groups: groups, tags: tags, cats: cats };
 }
 function fixFilters(pid) {
   var o = filterOptions(pid);
   if (S.owner && !o.owners[S.owner]) S.owner = '';
   if (S.group && !o.groups[S.group]) S.group = '';
   if (S.tag && !o.tags[S.tag]) S.tag = '';
+  if (S.cat && !o.cats[S.cat]) S.cat = '';
   if (S.status && STATUSES.indexOf(S.status) < 0) S.status = '';
   return o;
 }
@@ -535,12 +571,13 @@ function filterBar(pid, right) {
   var opt = function (list, v, all) { return '<option value="">' + all + '</option>' + list.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join(''); };
   return '<div class="toolbar">' + yearSelect() + '<span class="search">' + IC.search + '<input type="search" class="field" id="fQ" placeholder="搜尋工項、人名、ID" value="' + esc(S.q) + '"></span>' +
     '<select class="field" id="fOwner" title="負責人（含協力）">' + opt(Object.keys(owners).sort(function (a, b) { return a.localeCompare(b, 'zh-Hant'); }), S.owner, '所有負責人') + '</select>' +
+    (Object.keys(fo.cats).length > 1 || S.cat ? '<select class="field hide-m" id="fCat">' + opt(Object.keys(fo.cats).sort(function (a, b) { return a.localeCompare(b, 'zh-Hant'); }), S.cat, '所有分類') + '</select>' : '') +
     '<select class="field hide-m" id="fGroup">' + opt(Object.keys(groups).sort(), S.group, '所有群組') + '</select>' +
     (Object.keys(tags).length ? '<select class="field hide-m" id="fTag">' + opt(Object.keys(tags).sort(function (a, b) { return a.localeCompare(b, 'zh-Hant'); }), S.tag, '所有標籤') + '</select>' : '') +
     '<select class="field hide-m" id="fStatus">' + opt(STATUSES, S.status, '所有狀態') + '</select>' +
     '<button class="btn filter-btn' + (S.hideDone ? ' on' : '') + '" id="fHide">隱藏已完成</button>' +
     '<button class="btn filter-btn' + (S.onlyWarn ? ' on' : '') + '" id="fWarn">只看有警示</button>' +
-    (S.q || S.owner || S.group || S.tag || S.status || S.onlyWarn ? '<button class="btn ghost" id="fClear">清除篩選</button>' : '') +
+    (S.q || S.owner || S.group || S.tag || S.cat || S.status || S.onlyWarn ? '<button class="btn ghost" id="fClear">清除篩選</button>' : '') +
     '<span class="grow"></span>' + (right || '') + '</div>';
 }
 function bindFilters() {
@@ -551,10 +588,11 @@ function bindFilters() {
   on('#fYear', 'change', function (e) { var ps = API.periods(); S.year = (ps.current && e.target.value === ps.current.label) ? '' : e.target.value; S.picked = {}; render(); });
   on('#fGroup', 'change', function (e) { S.group = e.target.value; render(); });
   on('#fTag', 'change', function (e) { S.tag = e.target.value; render(); });
+  on('#fCat', 'change', function (e) { S.cat = e.target.value; render(); });
   on('#fStatus', 'change', function (e) { S.status = e.target.value; if (S.status === '完成') S.hideDone = false; render(); });
   on('#fHide', 'click', function () { S.hideDone = !S.hideDone; remember(); render(); });
   on('#fWarn', 'click', function () { S.onlyWarn = !S.onlyWarn; render(); });
-  on('#fClear', 'click', function () { S.q = ''; S.owner = ''; S.group = ''; S.tag = ''; S.status = ''; S.onlyWarn = false; render(); });
+  on('#fClear', 'click', function () { S.q = ''; S.owner = ''; S.group = ''; S.tag = ''; S.cat = ''; S.status = ''; S.onlyWarn = false; render(); });
 }
 function groupsOf(list) {
   var g = {}, order = [];
@@ -566,6 +604,7 @@ function groupsOf(list) {
 var COL_DEFS = [
   { k: 'title', label: '工項', w: 30, l: true, fixed: true },
   { k: 'owner', label: '負責', w: 11, l: true },
+  { k: 'category', label: '分類', w: 8, l: true },
   { k: 'status', label: '狀態', w: 9 },
   { k: 'timeline', label: '時程', w: 14 },
   { k: 'days', label: '天數', w: 5 },
@@ -687,7 +726,7 @@ function renderBoard(c) {
     h += '<div style="overflow-x:auto"><table class="tbl cfg">' + colgroup(cols) + '<thead><tr><th></th><th><input type="checkbox" data-gpick="' + esc(g.name) + '"' + (allPicked ? ' checked' : '') + '></th>' +
       cols.map(function (cd) { return '<th class="' + (cd.l ? 'l ' : '') + 'cth" draggable="true" data-col="' + cd.k + '" title="拖曳可以調整順序；拉右邊緣可以調整寬度">' + cd.label + '<span class="rsz" data-rsz="' + cd.k + '"></span></th>'; }).join('') + '<th></th></tr></thead><tbody>';
     g.tasks.forEach(function (t) { h += rowHtml(t, g.color, tmin, tmax, cols); });
-    if (p.canEdit) h += '<tr class="add"><td class="edge" style="background:' + g.color + ';opacity:.45"></td><td></td><td colspan="' + (cols.length + 1) + '"><input placeholder="＋ 新增工項（輸入名稱後按 Enter）" data-addg="' + esc(g.name === '未分群組' ? '' : g.name) + '"></td></tr>';
+    if (p.canEdit) h += '<tr class="add"><td class="edge" style="background:' + g.color + ';opacity:.45"></td><td></td><td colspan="' + (cols.length + 1) + '"><input placeholder="＋ 新增工項（輸入名稱後按 Enter' + (hasCats() ? '，再選分類' : '') + '）" data-addg="' + esc(g.name === '未分群組' ? '' : g.name) + '"></td></tr>';
     h += '</tbody></table></div></div>';
   });
   if (p.canEdit && list.length) h += '<button class="btn" id="addGroup">' + IC.plus + '新增群組</button>';
@@ -754,6 +793,7 @@ function rowHtml(t, color, tmin, tmax, cols) {
   var cell = {
     title: '<td class="title" data-open="1"><div class="tt"><span class="n">' + esc(t.title) + '</span>' + (t.mode === '平行' ? '<span class="chip" title="不佔用負責人時間">平行</span>' : '') + (cols.some(function (c) { return c.k === 'tags'; }) ? '' : splitTags(t.tag).map(function (x) { return tagChip(x); }).join('')) + '<span class="id">' + esc(t.id) + '</span><button class="open">開啟</button></div></td>',
     owner: '<td class="owner cell' + (ed ? '' : ' ro') + '" data-ed="owner">' + person(t.owner) + (hl.length ? '<span class="hlp" title="協力：' + esc(hl.join('、')) + '">+' + hl.length + '</span>' : '') + '</td>',
+    category: '<td class="cell' + (ed ? '' : ' ro') + '" data-ed="category">' + (t.category ? esc(t.category) : '<span class="faint">—</span>') + '</td>',
     status: '<td class="status cell' + (up ? '' : ' ro') + '" data-ed="status"><div class="st-' + esc(t.status) + '">' + esc(t.status) + '</div></td>',
     timeline: '<td class="timeline cell ro">' + tl + '</td>',
     days: '<td class="num cell' + (ed ? '' : ' ro') + '" data-ed="days">' + esc(t.days) + '</td>',
@@ -798,11 +838,22 @@ function bindBoard(c, p) {
   $$('[data-addg]', c).forEach(function (inp) {
     inp.addEventListener('keydown', function (e) {
       if (e.key !== 'Enter' || !inp.value.trim()) return;
-      var title = inp.value.trim(), grp = inp.dataset.addg; inp.value = ''; inp.disabled = true;
-      call('saveTask', { project: p.id, group: grp, title: title, days: 1 }).then(function (r) {
-        upsert(r.task); applyComputed(r.computed); toast('已新增「' + title + '」，點格子可以設定負責人和天數'); render();
-        var again = $('.bgrp[data-g="' + CSS.escape(grp || '未分群組') + '"] [data-addg]'); if (again) again.focus();
-      }).catch(function (er) { inp.disabled = false; inp.value = title; fail(er); });
+      if (e.isComposing) return;
+      var title = inp.value.trim(), grp = inp.dataset.addg;
+      var create = function (cat) {
+        inp.value = ''; inp.disabled = true;
+        var o = { project: p.id, group: grp, title: title, days: 1 };
+        if (cat) { o.category = cat; o.owner = '__auto'; }
+        call('saveTask', o).then(function (r) {
+          upsert(r.task); applyComputed(r.computed);
+          var au = (r.auto || [])[0];
+          toast('已新增「' + title + '」' + (au ? (au.owner ? '，自動指派給 ' + au.owner : '；' + au.reason) : '，點格子可以設定負責人和天數')); render();
+          var again = $('.bgrp[data-g="' + CSS.escape(grp || '未分群組') + '"] [data-addg]'); if (again) again.focus();
+        }).catch(function (er) { inp.disabled = false; inp.value = title; fail(er); });
+      };
+      e.preventDefault();
+      // 有分類時先選分類（必填），再依分類自動指派
+      if (hasCats()) popCategory(inp, '', create); else create('');
     });
   });
   var ag = $('#addGroup');
@@ -880,7 +931,21 @@ function openSelectPop(sel) {
 }
 function editCell(td, t, field) {
   if (field === 'status') return popStatus(td, t, function (st) { patchTask(t.id, { status: st }); });
-  if (field === 'owner') return popOwner(td, t.owner, function (name) { patchTask(t.id, { owner: name }, name ? '已指派給 ' + name + '，排到他的工作最後' : ''); });
+  if (field === 'owner') return popOwner(td, t.owner, function (name) {
+    if (name === '__auto') {
+      var ok = skillOf(t.owner, t.category), keep = !!t.owner && !(ok && ok.days !== null && Number(t.days) === Number(ok.days));
+      var was = t.owner;
+      busy(true);
+      call('saveTask', { id: t.id, owner: '__auto', keepDays: keep, at: t.at }).then(function (r) { busy(false); upsert(r.task); applyComputed(r.computed); toast(r.task.owner && r.task.owner !== was ? '已自動指派給 ' + r.task.owner + '（' + r.autoReason + '）' : r.autoReason || '負責人沒有變動'); render(); }).catch(fail);
+      return;
+    }
+    var nd = name ? daysForOwner(t, name) : null, patch = { owner: name };
+    if (nd !== null) patch.days = nd;
+    patchTask(t.id, patch, name ? '已指派給 ' + name + (nd !== null ? '，天數改為 ' + name + ' 的預設 ' + nd + ' 天' : '') : '');
+  }, t.category);
+  if (field === 'category') return popCategory(td, t.category, function (v) {
+    patchTask(t.id, { category: v }, v && t.owner && !skillOf(t.owner, v) && skillsOf(v).length ? '分類改為「' + v + '」；注意：' + t.owner + ' 沒有設定支援這個分類' : '');
+  });
   if (field === 'days') return popNumber(td, t.days, '天數（工作天）', function (v) { patchTask(t.id, { days: v }, impactMsg); });
   if (field === 'release') return popDate(td, t.release, '出版日／期限', function (v) { patchTask(t.id, { release: v }); });
   if (field === 'preds') return popPreds(td, t);
@@ -893,19 +958,52 @@ function popStatus(anchor, t, cb) {
   }).join(''), 170);
   $$('.sopt', p).forEach(function (el) { el.addEventListener('click', function () { if (el.classList.contains('dis')) return; closePop(); if (el.dataset.s !== t.status) cb(el.dataset.s); }); });
 }
-function popOwner(anchor, current, cb) {
-  var people = S.data.people;
+function popCategory(anchor, current, cb) {
+  var list = catList(current);
+  if (!list.length) { toast('還沒有分類，請管理員到「設定 → 分類」建立。', true); return; }
+  var p = openPop(anchor, '<input class="field" placeholder="搜尋分類" id="popQ"><div id="popL"></div>', 220);
+  var hi = 0, shown = [];
+  var draw = function () {
+    var q = $('#popQ').value.trim().toLowerCase();
+    shown = list.filter(function (x) { return !q || x.toLowerCase().indexOf(q) >= 0; });
+    hi = Math.min(hi, Math.max(0, shown.length - 1));
+    $('#popL').innerHTML = shown.map(function (x, i) { return '<div class="opt' + (x === current ? ' on' : '') + (i === hi ? ' hi' : '') + '" data-i="' + i + '">' + esc(x) + '</div>'; }).join('') || '<div class="lab">找不到</div>';
+    $$('.opt', p).forEach(function (el) { el.addEventListener('click', function () { pick(shown[+el.dataset.i]); }); });
+  };
+  var pick = function (x) { if (x === undefined) return; closePop(); if (x !== current) cb(x); };
+  $('#popQ').addEventListener('input', function () { hi = 0; draw(); });
+  $('#popQ').addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { hi = Math.min(hi + 1, shown.length - 1); draw(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { hi = Math.max(hi - 1, 0); draw(); e.preventDefault(); }
+    if (e.key === 'Enter') { pick(shown[hi]); }
+  });
+  draw(); $('#popQ').focus();
+}
+function popOwner(anchor, current, cb, cat) {
+  var people = S.data.people, sk = cat !== undefined ? skillsOf(cat) : [], skN = {}, showAll = !sk.length;
+  sk.forEach(function (k) { skN[k.person] = k; });
   var p = openPop(anchor, '<input class="field" placeholder="搜尋人員" id="popQ"><div id="popL"></div>', 240);
   var hi = 0, list = [];
   var draw = function () {
     var q = $('#popQ').value.trim().toLowerCase();
-    list = [{ name: '' }].concat(people.filter(function (x) { return !q || (x.name + ' ' + (x.alias || '')).toLowerCase().indexOf(q) >= 0; }));
-    if (q) list = list.slice(1);
+    var match = function (x) { return !q || (x.name + ' ' + (x.alias || '')).toLowerCase().indexOf(q) >= 0; };
+    var sup = sk.map(function (k) { return { name: k.person, skill: k }; }).filter(match);
+    var rest = people.filter(function (x) { return !skN[x.name] && (showAll || x.name === current) && match(x); });
+    list = (cat !== undefined && !q ? [{ name: '__auto' }] : []).concat(sup, rest);
+    if (sk.length && !showAll && !q) list.push({ name: '__all' });
+    if (!q) list.push({ name: '' });
     hi = Math.min(hi, list.length - 1);
-    $('#popL').innerHTML = list.slice(0, 60).map(function (x, i) { return '<div class="opt' + (x.name === current ? ' on' : '') + (i === hi ? ' hi' : '') + '" data-i="' + i + '">' + (x.name ? avatar(x.name, true) + esc(x.name) + (x.role !== '美術' ? ' <span class="faint">' + esc(x.role) + '</span>' : '') : '<span class="av sm none"></span>未指派') + '</div>'; }).join('') || '<div class="lab">找不到</div>';
+    var lastSec = null;
+    $('#popL').innerHTML = list.slice(0, 80).map(function (x, i) {
+      var sec = x.skill ? 'sup' : (x.name && x.name.indexOf('__') !== 0 ? 'rest' : ''), lab = '';
+      if (sec && sec !== lastSec && sk.length) lab = '<div class="lab">' + (sec === 'sup' ? '支援「' + esc(cat) + '」' : '其他人員') + '</div>';
+      if (sec) lastSec = sec;
+      var inner = x.name === '__auto' ? '<span class="av sm none"></span><b>自動指派</b>' : x.name === '__all' ? '<span class="av sm none"></span><span class="faint">顯示全部人員…</span>' : x.name ? avatar(x.name, true) + esc(x.name) + (x.skill ? ' <span class="faint">' + esc(skillLabel(x.skill)) + '</span>' : (x.role && x.role !== '美術' ? ' <span class="faint">' + esc(x.role) + '</span>' : '')) : '<span class="av sm none"></span>未指派';
+      return lab + '<div class="opt' + (x.name === current ? ' on' : '') + (i === hi ? ' hi' : '') + '" data-i="' + i + '">' + inner + '</div>';
+    }).join('') || '<div class="lab">找不到</div>';
     $$('.opt', p).forEach(function (el) { el.addEventListener('click', function () { pick(list[+el.dataset.i]); }); });
   };
-  var pick = function (x) { if (!x) return; closePop(); if (x.name !== current) cb(x.name); };
+  var pick = function (x) { if (!x) return; if (x.name === '__all') { showAll = true; hi = 0; draw(); $('#popQ').focus(); return; } closePop(); if (x.name !== current || x.name === '__auto') cb(x.name); };
   $('#popQ').addEventListener('input', function () { hi = 0; draw(); });
   $('#popQ').addEventListener('keydown', function (e) {
     if (e.key === 'ArrowDown') { hi = Math.min(hi + 1, list.length - 1); draw(); e.preventDefault(); }
@@ -960,7 +1058,7 @@ function renderBulkBar() {
   var ids = Object.keys(S.picked).filter(function (id) { return byId[id]; });
   if (!ids.length || S.route.view !== 'board') return;
   var bar = document.createElement('div'); bar.className = 'bulkbar';
-  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
+  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm" id="bkAuto" title="依分類與人員工項，重新自動分配未開始的工項">自動指派</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
   document.body.appendChild(bar);
   var tasks = ids.map(function (id) { return byId[id]; });
   var editable = tasks.filter(canEdit);
@@ -976,6 +1074,16 @@ function renderBulkBar() {
       editable.forEach(function (t) { patchTask(t.id, { owner: name }); });
       S.picked = {}; toast('已指派 ' + editable.length + ' 項給 ' + (name || '未指派'));
     });
+  });
+  $('#bkAuto').addEventListener('click', function () {
+    var ids = editable.filter(function (t) { return t.status === '未開始' || t.status === '暫停'; }).map(function (t) { return t.id; });
+    if (!ids.length) { toast('只會重新分配「未開始」或「暫停」的工項', true); return; }
+    if (!confirm('依分類和人員工項，重新自動分配選取的 ' + ids.length + ' 個未開始工項？已手動調整過的天數會保留。')) return;
+    busy(true);
+    call('autoAssignTasks', ids).then(function (r) {
+      busy(false); r.tasks.forEach(upsert); applyComputed(r.computed); S.picked = {}; render();
+      autoResultModal('自動指派結果：' + r.count + ' 項有變動', r.results);
+    }).catch(fail);
   });
   $('#bkDel').addEventListener('click', function () {
     if (!confirm('刪除選取的 ' + editable.length + ' 個工項？刪除後無法復原。若只是不做了，建議改成「取消」狀態。')) return;

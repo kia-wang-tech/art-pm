@@ -16,7 +16,7 @@ var API = (function () {
   function dOrNull(v) { return v ? String(v).slice(0, 10) : null; }
   function split(s) { return Engine.splitIds(s); }
   function err(e) {
-    var m = (e && (e.message || e.error_description || e.msg)) || String(e);
+    var m = (e && (e.message || e.error_description || e.msg || e.details || e.hint || (e.code ? '錯誤代碼 ' + e.code : ''))) || String(e);
     if (/row-level security|permission denied/i.test(m)) m = '你沒有這個操作的權限。';
     if (/JWT expired|invalid JWT/i.test(m)) m = '登入已過期，請重新整理頁面再登入一次。';
     if (/Failed to fetch|NetworkError/i.test(m)) m = '連不到資料庫，請檢查網路後再試一次。';
@@ -29,7 +29,7 @@ var API = (function () {
 
   var T_MAP = { id: 'id', project: 'project', group: 'grp', code: 'code', tag: 'tag', title: 'title', detail: 'detail', owner: 'owner',
     helper: 'helper', mode: 'mode', prio: 'prio', days: 'days', preds: 'preds', lag: 'lag', earliest: 'earliest', release: 'release',
-    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note' };
+    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note', category: 'category' };
   var T_DATES = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1 };
   var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1, pct: 1 };
 
@@ -38,7 +38,7 @@ var API = (function () {
       id: r.id, project: r.project, group: r.grp || '', code: r.code || '', tag: r.tag || '', title: r.title, detail: r.detail || '',
       owner: r.owner || '', helper: r.helper || '', mode: r.mode, prio: num(r.prio, ''), days: num(r.days, 0), preds: r.preds || '',
       lag: num(r.lag, 0), earliest: r.earliest || '', release: r.release || '', status: r.status, doneQty: num(r.done_qty, 0),
-      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', src: r.src || '',
+      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', category: r.category || '', src: r.src || '',
       by: r.updated_by || '', updatedAt: r.updated_at ? new Date(new Date(r.updated_at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '',
       at: r.version, version: r.version, archived: r.archived || ''
     };
@@ -50,6 +50,7 @@ var API = (function () {
       var v = o[k];
       if (T_DATES[k]) v = dOrNull(v);
       else if (T_NUMS[k]) v = (v === '' || v === null || v === undefined) ? ((k === 'prio' || k === 'pct') ? null : 0) : Number(v);
+      else if (k === 'category') v = v ? String(v) : null;
       else v = v === null || v === undefined ? '' : String(v);
       r[T_MAP[k]] = v;
     });
@@ -118,9 +119,10 @@ var API = (function () {
     return Promise.all([
       fetchAll('tasks', 'id', function (q) { return q.is('archived', null); }), fetchAll('projects', 'id'), fetchAll('people', 'name'), fetchAll('calendar', 'day'),
       fetchAll('leaves', 'id'), fetchAll('templates', 'id'), fetchAll('settings', 'key'),
-      fetchAll('vendors', 'name').catch(function () { return []; }), fetchAll('tag_colors', 'name').catch(function () { return []; })
+      fetchAll('vendors', 'name').catch(function () { return []; }), fetchAll('tag_colors', 'name').catch(function () { return []; }),
+      fetchAll('categories', 'name').catch(function () { return []; }), fetchAll('person_types', 'person').catch(function () { return []; })
     ]).then(function (r) {
-      cache.vendors = r[7]; cache.tagColors = {}; r[8].forEach(function (x) { cache.tagColors[x.name] = x.color; });
+      cache.vendors = r[7]; cache.categories = r[9] || []; cache.personTypes = r[10] || []; cache.tagColors = {}; r[8].forEach(function (x) { cache.tagColors[x.name] = x.color; });
       cache.tasks = r[0].map(fromDb); cache.byId = {};
       cache.tasks.forEach(function (t) { cache.byId[t.id] = t; });
       cache.projects = r[1]; cache.people = r[2]; cache.calendar = r[3]; cache.leaves = r[4]; cache.templates = r[5];
@@ -132,6 +134,18 @@ var API = (function () {
   function clientProject(p) {
     return { id: p.id, name: p.name, code: p.code, status: p.status, pm: p.pm, start: p.start || '', target: p.target || '', color: p.color, note: p.note, icon: p.icon || '', canEdit: canEditProject(p) };
   }
+  function sortedCats() { return (cache.categories || []).slice().sort(function (a, b) { return (a.sort - b.sort) || a.name.localeCompare(b.name, 'zh-Hant'); }); }
+  /** 分類 → 支援的在職人員 [{person, level, days}]，依等級排序（只有 PM／管理員讀得到資料） */
+  function skillMap() {
+    var act = {}, m = {};
+    cache.people.forEach(function (p) { if (p.active) act[p.name] = 1; });
+    (cache.personTypes || []).forEach(function (x) {
+      if (!act[x.person]) return;
+      (m[x.category] = m[x.category] || []).push({ person: x.person, level: x.level, days: x.days === null || x.days === undefined ? null : Number(x.days) });
+    });
+    Object.keys(m).forEach(function (k) { m[k].sort(function (a, b) { return (a.level - b.level) || a.person.localeCompare(b.person, 'zh-Hant'); }); });
+    return m;
+  }
   function snapshot(history) {
     var cutoff = Engine.dn(today()) - HISTORY_DAYS;
     var tasks = cache.tasks.filter(function (t) {
@@ -140,7 +154,7 @@ var API = (function () {
       return (Engine.dn(r.end) || 0) >= cutoff;
     }).map(view);
     var tpl = {};
-    cache.templates.forEach(function (s) { (tpl[s.tpl] = tpl[s.tpl] || []).push({ step: s.step, title: s.title, group: s.grp, days: s.days, preds: s.preds || '', mode: s.mode }); });
+    cache.templates.forEach(function (s) { (tpl[s.tpl] = tpl[s.tpl] || []).push({ step: s.step, title: s.title, group: s.grp, days: s.days, preds: s.preds || '', mode: s.mode, category: s.category || '' }); });
     var hol = {}, mk = {};
     cache.calendar.forEach(function (c) { if (c.type === '補班') mk[c.day] = 1; else hol[c.day] = c.name || '假日'; });
     return {
@@ -150,6 +164,8 @@ var API = (function () {
       tasks: tasks,
       vendors: (cache.vendors || []).map(function (v) { return { name: v.name, type: v.type, alias: v.alias, active: v.active }; }),
       tagColors: Object.assign({}, cache.tagColors || {}),
+      categories: sortedCats().map(function (c) { return { name: c.name, active: c.active, note: c.note || '' }; }),
+      skills: skillMap(),
       templates: Object.keys(tpl).map(function (k) { return { name: k, steps: tpl[k].sort(function (a, b) { return a.step - b.step; }) }; }),
       holidays: hol, makeup: mk,
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days, type: l.type, note: l.note }; }),
@@ -309,9 +325,16 @@ var API = (function () {
 
   function saveTask(obj) {
     validate(obj);
-    if (!obj.id) return insertTasks([obj]).then(function (r) { return { task: r.tasks[0], computed: r.computed, changes: ['（新增）'] }; });
+    if (!obj.id) return insertTasks([obj]).then(function (r) { return { task: r.tasks[0], computed: r.computed, changes: ['（新增）'], auto: r.auto }; });
     var cur = cache.byId[obj.id];
     if (!cur) return Promise.reject(new Error('找不到工項 ' + obj.id + '，可能已被刪除，請重新整理。'));
+    var autoReason = '';
+    if (obj.owner === '__auto') {
+      var d = copyTask(cur); Object.keys(obj).forEach(function (k) { if (k in T_MAP) d[k] = obj[k]; }); d.owner = ''; d.keepDays = !!obj.keepDays;
+      var pl = planAssign([d])[0];
+      obj = copyTask(obj); obj.owner = pl.owner || cur.owner; if (pl.owner) obj.days = pl.days; autoReason = pl.reason;
+      delete obj.keepDays;
+    }
     var patch = {}, changes = [];
     Object.keys(T_MAP).forEach(function (k) {
       if (k === 'id' || !(k in obj)) return;
@@ -319,7 +342,7 @@ var API = (function () {
       if (k === 'preds') { a = split(a).join(', '); b = split(b).join(', '); }
       if (a !== b) { patch[k] = obj[k]; changes.push(k); }
     });
-    if (!changes.length) return Promise.resolve({ task: view(cur), computed: computedMap(), changes: [] });
+    if (!changes.length) return Promise.resolve({ task: view(cur), computed: computedMap(), changes: [], autoReason: autoReason });
     if ('preds' in patch) { var ce = cycleError(cache.tasks, cur.id, split(patch.preds)); if (ce) return Promise.reject(ce); }
     var version = obj.at !== undefined && obj.at !== '' ? obj.at : cur.version;
     return sb.from('tasks').update(toDb(patch)).eq('id', cur.id).eq('version', version).select().then(function (res) {
@@ -333,13 +356,89 @@ var API = (function () {
         });
       }
       var o = afterWrite(rows);
-      o.task = view(cache.byId[cur.id]); o.changes = changes;
+      o.task = view(cache.byId[cur.id]); o.changes = changes; o.autoReason = autoReason;
       return o;
     }).catch(function (e) { throw err(e); });
   }
   function setStatus(id, status, at) { return saveTask({ id: id, status: status, at: at }); }
 
-  /** rows: 用戶端格式；preds 可用「#序號」或「$key」指同一批 */
+  /* ---------------- 自動指派 ----------------
+     依「人員工項」挑人：先在主要人員裡找最快完成的；次要／可支援人員能讓這項
+     ① 趕上主要人員趕不上的期限，或 ② 提早 N 個工作天以上（設定「自動指派提早天數」）完成，才改派給他。
+     drafts 依序處理，前面的結果會占用人員時間；每項回傳 {owner, days, level, reason}。 */
+  var LEVEL_NAME = { 1: '主要', 2: '次要', 3: '可支援' };
+  function earlyDays() { var n = parseInt(cache.settings && cache.settings['自動指派提早天數'], 10); return n >= 0 ? n : 5; }
+  function planAssign(drafts, excludeIds) {
+    var skills = skillMap(), N = earlyDays(), skip = {};
+    (excludeIds || []).forEach(function (id) { skip[id] = 1; });
+    drafts.forEach(function (d) { skip[d.id] = 1; });
+    var base = cache.tasks.filter(function (t) { return !skip[t.id]; });
+    var maxPrio = {};
+    cache.tasks.forEach(function (t) { if (Number(t.prio) > (maxPrio[t.owner] || 0)) maxPrio[t.owner] = Number(t.prio); });
+    var out = [];
+    drafts.forEach(function (d) {
+      var cands = d.category ? (skills[d.category] || []) : [];
+      if (!cands.length) {
+        var t0 = copyTask(d); t0.owner = ''; base.push(t0);
+        out.push({ owner: '', days: d.days, level: 0, reason: d.category ? '沒有人員支援「' + d.category + '」，先不指派' : '沒有設定分類，無法自動指派' });
+        return;
+      }
+      var tried = cands.map(function (c) {
+        var t = copyTask(d); t.owner = c.person; t.prio = (maxPrio[c.person] || 0) + 10;
+        if (!d.keepDays && c.days !== null) t.days = c.days;
+        t.helper = Engine.splitNames(t.helper).filter(function (n) { return n !== c.person; }).join(', ');
+        var res = Engine.schedule(engineInput(base.concat([t]))), r = res.result[t.id];
+        return { c: c, t: t, end: r.end || '9999-12-31', endN: Engine.dn(r.end) || 9e9, late: r.warn.some(function (w) { return w.indexOf('超過出版日') === 0; }), cal: res.cal };
+      });
+      var best = {};
+      tried.forEach(function (x) { var b = best[x.c.level]; if (!b || x.endN < b.endN || (x.endN === b.endN && x.t.days < b.t.days)) best[x.c.level] = x; });
+      var levels = Object.keys(best).map(Number).sort();
+      var pick = best[levels[0]], why = LEVEL_NAME[pick.c.level] + '人員中最快完成';
+      levels.slice(1).forEach(function (L) {
+        var x = best[L];
+        var gain = x.cal.workdaysBetween(x.endN, pick.endN);
+        if (pick.late && !x.late && x.endN < pick.endN) { why = LEVEL_NAME[pick.c.level] + '人員趕不上期限，改派' + LEVEL_NAME[L] + '人員'; pick = x; }
+        else if (gain >= N && gain > 0) { why = '比' + LEVEL_NAME[pick.c.level] + '人員提早 ' + gain + ' 個工作天完成，改派' + LEVEL_NAME[L] + '人員'; pick = x; }
+      });
+      maxPrio[pick.c.person] = pick.t.prio;
+      base.push(pick.t);
+      out.push({ owner: pick.c.person, days: pick.t.days, level: pick.c.level, end: pick.end, reason: why });
+    });
+    return out;
+  }
+  /** 試算：這些草稿自動指派的結果（不存檔） */
+  function previewAssign(drafts) {
+    try {
+      var list = drafts.map(function (d, i) { var t = copyTask(d); t.id = d.id || ('（新' + i + '）'); t.status = t.status || '未開始'; t.mode = t.mode || '排隊'; t.qty = t.qty || 1; t.doneQty = t.doneQty || 0; t.days = num(t.days, 1); return t; });
+      return Promise.resolve(planAssign(list));
+    } catch (e) { return Promise.reject(err(e)); }
+  }
+  /** 重新自動分配：只處理未開始／暫停、有分類的工項；依期限先後處理 */
+  function autoAssignTasks(ids) {
+    var list = ids.map(function (id) { return cache.byId[id]; }).filter(function (t) { return t && (t.status === '未開始' || t.status === '暫停') && t.mode !== '平行'; });
+    if (!list.length) return Promise.resolve({ count: 0, skipped: ids.length, tasks: [], computed: computedMap(), results: [] });
+    list.sort(function (a, b) { return (a.release || '9999') < (b.release || '9999') ? -1 : (a.release || '9999') > (b.release || '9999') ? 1 : (a.id < b.id ? -1 : 1); });
+    var sm = skillMap();
+    var plan = planAssign(list.map(function (t) {
+      var c = copyTask(t), k = (sm[t.category] || []).filter(function (x) { return x.person === t.owner; })[0];
+      c.keepDays = !!t.owner && !(k && k.days !== null && Number(k.days) === Number(t.days));   // 手動改過的天數保留
+      c.owner = ''; return c;
+    }));
+    var jobs = [], results = [];
+    list.forEach(function (t, i) {
+      var p = plan[i]; results.push({ id: t.id, title: t.title, owner: p.owner, from: t.owner, reason: p.reason });
+      if (!p.owner || (p.owner === t.owner && Number(p.days) === Number(t.days))) return;
+      jobs.push(t);
+    });
+    return jobs.reduce(function (pr, t) {
+      var p = plan[list.indexOf(t)];
+      return pr.then(function () { return saveTask({ id: t.id, owner: p.owner, days: p.days }); });
+    }, Promise.resolve()).then(function () {
+      return { count: jobs.length, skipped: ids.length - list.length, tasks: list.map(function (t) { return view(cache.byId[t.id]); }), computed: computedMap(), results: results };
+    });
+  }
+
+  /** rows: 用戶端格式；preds 可用「#序號」或「$key」指同一批。owner 為 '__auto' 的列會自動指派 */
   function insertTasks(rows) {
     return sb.rpc('reserve_task_ids', { n: rows.length }).then(function (res) {
       var ids = chk(res);
@@ -348,7 +447,7 @@ var API = (function () {
           id: ids[i], project: o.project, group: o.group || '', code: o.code || '', tag: o.tag || '', title: String(o.title || '').trim(),
           detail: o.detail || '', owner: o.owner || '', helper: o.helper || '', mode: o.mode || '排隊', prio: o.prio === undefined ? '' : o.prio,
           days: num(o.days, 1), preds: o.preds || '', lag: num(o.lag, 0), earliest: o.earliest || '', release: o.release || '',
-          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || ''
+          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || '', category: o.category || ''
         };
         validate(t);
         return t;
@@ -362,6 +461,13 @@ var API = (function () {
           return full[k].id;
         }).join(', ');
       });
+      // 自動指派（依序處理，同一批前面的工項會先占用人員時間）
+      var autoIdx = [];
+      full.forEach(function (t, i) { if (rows[i].owner === '__auto') { autoIdx.push(i); t.owner = ''; t.keepDays = !!rows[i].keepDays; } });
+      if (autoIdx.length) {
+        var plan = planAssign(autoIdx.map(function (i) { return full[i]; }));
+        autoIdx.forEach(function (i, k) { full[i].owner = plan[k].owner; full[i].days = num(plan[k].days, full[i].days); full[i].autoReason = plan[k].reason; delete full[i].keepDays; });
+      }
       // 同一人的新工項排到隊伍最後
       var maxPrio = {};
       cache.tasks.forEach(function (t) { if (Number(t.prio) > (maxPrio[t.owner] || 0)) maxPrio[t.owner] = Number(t.prio); });
@@ -375,6 +481,7 @@ var API = (function () {
         var o = afterWrite(rows2);
         o.tasks = full.map(function (t) { return view(cache.byId[t.id]); });
         o.created = full.map(function (t) { return t.id; });
+        o.auto = full.filter(function (t) { return t.autoReason; }).map(function (t) { return { id: t.id, title: t.title, owner: t.owner, reason: t.autoReason }; });
         return o;
       });
     }).catch(function (e) { throw err(e); });
@@ -382,6 +489,14 @@ var API = (function () {
 
   function previewTask(obj) {
     try {
+      var auto = null;
+      if (obj.owner === '__auto') {
+        var o0 = obj.id ? cache.byId[obj.id] : null, d = o0 ? copyTask(o0) : { status: '未開始', mode: '排隊', qty: 1, doneQty: 0, prio: '' };
+        Object.keys(obj).forEach(function (k) { if (k in T_MAP) d[k] = obj[k]; });
+        d.id = obj.id || '（新工項）'; d.owner = ''; d.days = num(d.days, 1); d.keepDays = !!obj.keepDays;
+        auto = planAssign([d])[0];
+        obj = copyTask(obj); obj.owner = auto.owner; if (auto.owner) obj.days = auto.days;
+      }
       var id = obj.id || '（新工項）', orig = obj.id ? cache.byId[obj.id] : null;
       var t2 = orig ? copyTask(orig) : { id: id, status: '未開始', mode: '排隊', qty: 1, doneQty: 0, prio: '' };
       Object.keys(obj).forEach(function (k) { if (k in T_MAP) t2[k] = obj[k]; });
@@ -405,7 +520,7 @@ var API = (function () {
       });
       items.sort(function (x, y) { return Math.abs(y.delta) - Math.abs(x.delta); });
       var s = after.result[id];
-      return Promise.resolve({ self: { start: s.start, end: s.end, warns: s.warn }, items: items.slice(0, 200), total: items.length });
+      return Promise.resolve({ self: { start: s.start, end: s.end, warns: s.warn }, items: items.slice(0, 200), total: items.length, auto: auto });
     } catch (e) { return Promise.reject(err(e)); }
   }
 
@@ -425,8 +540,12 @@ var API = (function () {
         var m = busyDays[t.owner] || (busyDays[t.owner] = {});
         r.alloc.forEach(function (a) { if (a[1] > 0.01) m[a[0]] = 1; });
       });
+      var sk = {}; (skillMap()[base.category] || []).forEach(function (x) { sk[x.person] = x; });
+      if (base.owner === '__auto') base.owner = orig ? orig.owner : '';
       var rows = people.map(function (p) {
         var t2 = copyTask(base); t2.owner = p.name;
+        var skill = sk[p.name];
+        if (skill && skill.days !== null && !obj.keepDays) t2.days = skill.days;
         t2.helper = Engine.splitNames(t2.helper).filter(function (n) { return n !== p.name; }).join(', ');
         if (!orig || orig.owner !== p.name) { var mx = 0; cache.tasks.forEach(function (t) { if (t.owner === p.name && Number(t.prio) > mx) mx = Number(t.prio); }); t2.prio = mx + 10; }
         var list = orig ? cache.tasks.map(function (t) { return t.id === id ? t2 : t; }) : cache.tasks.concat([t2]);
@@ -450,7 +569,7 @@ var API = (function () {
         });
         var free = null, bd = busyDays[p.name] || {};
         for (var y = td; y < td + 400; y++) { if (cal.cap(p.name, y) > 0 && !bd[y]) { free = Engine.ds(y); break; } }
-        return { name: p.name, role: p.role, start: s.start, end: s.end, delayed: delayed, maxDelay: maxD, late: late, load: cap ? Math.round(used / cap * 100) : 0, free: free, current: !!(orig && orig.owner === p.name) };
+        return { name: p.name, role: p.role, level: skill ? skill.level : 0, days: t2.days, start: s.start, end: s.end, delayed: delayed, maxDelay: maxD, late: late, load: cap ? Math.round(used / cap * 100) : 0, free: free, current: !!(orig && orig.owner === p.name) };
       });
       rows.sort(function (a, b) { return (a.end < b.end ? -1 : a.end > b.end ? 1 : 0) || (a.delayed - b.delayed) || (a.load - b.load); });
       return Promise.resolve(rows);
@@ -497,6 +616,7 @@ var API = (function () {
       return {
         project: spec.project, group: spec.group || s.grp, title: ((spec.prefix ? spec.prefix + ' ' : '') + s.title).trim(),
         owner: (spec.owners && spec.owners[key]) || '', days: (spec.days && spec.days[key] !== undefined && spec.days[key] !== '') ? spec.days[key] : s.days,
+        category: (spec.categories && spec.categories[key] !== undefined) ? spec.categories[key] : (s.category || ''), keepDays: !!(spec.keepDays && spec.keepDays[key]),
         mode: s.mode || '排隊', preds: preds.join(', '), earliest: preds.length ? '' : (spec.earliest || ''), release: spec.release || '', tag: spec.tag || ''
       };
     });
@@ -508,7 +628,8 @@ var API = (function () {
     cache.people.forEach(function (p) { names[p.name] = 1; });
     try {
       rows.forEach(function (r, i) {
-        if (r.owner && !names[r.owner]) throw new Error('第 ' + (i + 1) + ' 列：「人員」名單裡沒有「' + r.owner + '」。');
+        if (r.owner && r.owner !== '__auto' && !names[r.owner]) throw new Error('第 ' + (i + 1) + ' 列：「人員」名單裡沒有「' + r.owner + '」。');
+        if (r.category && !(cache.categories || []).some(function (c) { return c.name === r.category; })) throw new Error('第 ' + (i + 1) + ' 列：沒有「' + r.category + '」這個分類，請先到「設定 → 分類」新增。');
         split(r.preds).forEach(function (p) { if (!/^#\d+$/.test(p) && !cache.byId[p]) throw new Error('第 ' + (i + 1) + ' 列：前置 ' + p + ' 不存在。'); });
       });
     } catch (e) { return Promise.reject(e); }
@@ -586,7 +707,10 @@ var API = (function () {
       vendors: (cache.vendors || []).map(function (v) { return { name: v.name, email: v.email || '', type: v.type || '', alias: v.alias || '', active: v.active, note: v.note || '' }; })
         .sort(function (a, b) { return (b.active - a.active) || a.name.localeCompare(b.name, 'zh-Hant'); }),
       vendorUsage: (function () { var u = {}; cache.tasks.forEach(function (t) { Engine.splitNames(t.helper).forEach(function (n) { u[n] = (u[n] || 0) + 1; }); }); return u; })(),
-      usage: (function () { var u = {}; cache.tasks.forEach(function (t) { if (t.owner) u[t.owner] = (u[t.owner] || 0) + 1; }); return u; })()
+      usage: (function () { var u = {}; cache.tasks.forEach(function (t) { if (t.owner) u[t.owner] = (u[t.owner] || 0) + 1; }); return u; })(),
+      categories: sortedCats().map(function (c) { return { name: c.name, sort: c.sort, active: c.active, note: c.note || '' }; }),
+      catUsage: (function () { var u = {}; cache.tasks.forEach(function (t) { if (t.category) u[t.category] = (u[t.category] || 0) + 1; }); return u; })(),
+      personTypes: (cache.personTypes || []).map(function (x) { return { person: x.person, category: x.category, level: x.level, days: x.days === null ? '' : Number(x.days), note: x.note || '' }; })
     };
   }
   function refresh(history) { compute(); return snapshot(history); }
@@ -690,6 +814,7 @@ var API = (function () {
     try {
       steps.forEach(function (s, i) {
         if (!String(s.title || '').trim()) throw new Error('第 ' + (i + 1) + ' 步缺工項名稱。');
+        if (!s.category && (cache.categories || []).length) throw new Error('第 ' + (i + 1) + ' 步還沒選分類。');
         nums[i + 1] = 1;
       });
       steps.forEach(function (s, i) {
@@ -698,7 +823,7 @@ var API = (function () {
     } catch (e) { return Promise.reject(e); }
     if (name !== oldName && cache.templates.some(function (t) { return t.tpl === name; })) return Promise.reject(new Error('已經有叫「' + name + '」的範本。'));
     var rows = steps.map(function (s, i) {
-      return { tpl: name, step: i + 1, title: String(s.title).trim(), grp: s.grp || '', days: num(s.days, 1), preds: split(s.preds).join(','), mode: s.mode === '平行' ? '平行' : '排隊' };
+      return { tpl: name, step: i + 1, title: String(s.title).trim(), grp: s.grp || '', days: num(s.days, 1), preds: split(s.preds).join(','), mode: s.mode === '平行' ? '平行' : '排隊', category: s.category || null };
     });
     var del = oldName ? sb.from('templates').delete().eq('tpl', oldName).then(chk) : Promise.resolve();
     return del.then(function () { return sb.from('templates').insert(rows).select(); }).then(function (res) {
@@ -815,17 +940,19 @@ var API = (function () {
   var SHEETS = {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
-      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度' }],
+      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度', category: '分類' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註', icon: '圖示' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
     vendors: ['外包', { name: '名稱', email: 'Email', type: '類型', alias: '別名', active: '合作', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
     leaves: ['休假', { person: '人員', start_date: '開始日', end_date: '結束日', days: '天數', type: '類型', note: '說明' }],
-    templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式' }],
+    templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式', category: '分類' }],
+    categories: ['分類', { name: '名稱', sort: '排序', active: '使用中', note: '說明' }],
+    person_types: ['人員工項', { person: '人員', category: '分類', level: '等級', days: '天數', note: '備註' }],
     settings: ['設定', { key: '項目', value: '值', note: '說明' }]
   };
   var DATE_COLS = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1, start: 1, target: 1, day: 1, start_date: 1, end_date: 1 };
-  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, pct: 1, step: 1 };
+  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, pct: 1, step: 1, sort: 1 };
   function cellDate(v) {
     if (v === '' || v === null || v === undefined) return null;
     if (typeof v === 'number') return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
@@ -838,7 +965,7 @@ var API = (function () {
     var out = {}, warn = [];
     Object.keys(SHEETS).forEach(function (key) {
       var name = SHEETS[key][0], map = SHEETS[key][1], ws = wb.Sheets[name];
-      if (!ws) { if (key !== 'settings' && key !== 'vendors') throw new Error('找不到「' + name + '」分頁。'); return; }
+      if (!ws) { if (['settings', 'vendors', 'categories', 'person_types'].indexOf(key) < 0) throw new Error('找不到「' + name + '」分頁。'); return; }
       var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
       var head = (rows[0] || []).map(function (h) { return String(h).trim(); });
       var idx = {};
@@ -866,7 +993,7 @@ var API = (function () {
       if (t.lag === null || isNaN(t.lag)) t.lag = 0;
       if (t.done_qty === null || isNaN(t.done_qty)) t.done_qty = 0;
       if (t.qty === null || isNaN(t.qty)) t.qty = 1;
-      t.archived = t.archived || null;
+      t.archived = t.archived || null; t.category = t.category || null;
       t.updated_by = '匯入'; t.updated_at = now; t.version = 1;
       return t;
     });
@@ -882,10 +1009,16 @@ var API = (function () {
     out.people = out.people.filter(function (p) { if (!p.email) return true; if (seen[p.email]) { warn.push('Email 重複：' + p.email + '（' + p.name + '）'); return false; } seen[p.email] = 1; return true; });
     out.calendar = out.calendar.filter(function (c) { return c.day; }).map(function (c) { c.type = c.type === '補班' ? '補班' : '假日'; return c; });
     out.leaves = out.leaves.filter(function (l) { return l.person && l.start_date; }).map(function (l) { l.end_date = l.end_date || l.start_date; l.type = l.type || '排休'; l.note = l.note || ''; return l; });
-    out.templates = out.templates.filter(function (s) { return s.tpl && s.title; }).map(function (s) { s.grp = s.grp || ''; s.preds = String(s.preds || ''); s.mode = s.mode || '排隊'; s.days = s.days || 1; return s; });
+    out.templates = out.templates.filter(function (s) { return s.tpl && s.title; }).map(function (s) { s.grp = s.grp || ''; s.preds = String(s.preds || ''); s.mode = s.mode || '排隊'; s.days = s.days || 1; s.category = s.category || null; return s; });
     if (out.vendors) out.vendors = out.vendors.filter(function (v) { return v.name; }).map(function (v) {
       v.email = (v.email || '').toLowerCase(); v.type = v.type === '廠商' || v.type === '個人' ? v.type : ''; v.alias = v.alias || ''; v.note = v.note || '';
       v.active = !(v.active === '否' || v.active === 'false' || v.active === 'FALSE'); return v;
+    });
+    var NO = function (v) { return v === '否' || v === 'false' || v === 'FALSE' || v === false; };
+    if (out.categories) out.categories = out.categories.filter(function (c) { return c.name; }).map(function (c) { return { name: c.name, sort: c.sort === null || isNaN(c.sort) ? 0 : c.sort, active: !NO(c.active), note: c.note || '' }; });
+    if (out.person_types) out.person_types = out.person_types.filter(function (x) { return x.person && x.category; }).map(function (x) {
+      var lv = { '主要': 1, '次要': 2, '可支援': 3 }[x.level] || Number(x.level) || 1;
+      return { person: x.person, category: x.category, level: Math.min(3, Math.max(1, lv)), days: x.days === null || isNaN(x.days) ? null : x.days, note: x.note || '' };
     });
     if (out.settings) out.settings = out.settings.filter(function (s) { return s.key && s.key !== '個人排程輸出試算表ID' && s.key !== '今天'; }).map(function (s) { s.value = s.value || ''; s.note = s.note || ''; return s; });
     // 檢查：工項的專案存在、負責人在名單上
@@ -925,6 +1058,72 @@ var API = (function () {
     return sb.from('vendors').delete().eq('name', name).select('name').then(function (res) {
       if (!chk(res).length) throw new Error('你沒有刪除外包的權限。');
       cache.vendors = (cache.vendors || []).filter(function (x) { return x.name !== name; });
+    }).catch(function (e) { throw err(e); });
+  }
+  /* ---------------- 分類、人員工項（管理員） ---------------- */
+  function saveCategory(origName, o) {
+    var name = String(o.name || '').trim();
+    if (!name) return Promise.reject(new Error('請填分類名稱。'));
+    var row = { sort: num(o.sort, 0), active: o.active !== false, note: o.note || '' };
+    var step = Promise.resolve();
+    if (origName && name !== origName) {
+      step = sb.rpc('rename_category', { p_old: origName, p_new: name }).then(chk).then(function () {
+        cache.categories.forEach(function (c) { if (c.name === origName) c.name = name; });
+        cache.tasks.forEach(function (t) { if (t.category === origName) t.category = name; });
+        cache.templates.forEach(function (t) { if (t.category === origName) t.category = name; });
+        (cache.personTypes || []).forEach(function (x) { if (x.category === origName) x.category = name; });
+      });
+    }
+    return step.then(function () {
+      var q = origName ? sb.from('categories').update(row).eq('name', name).select() : sb.from('categories').insert(Object.assign({ name: name }, row)).select();
+      return q;
+    }).then(function (res) {
+      var r = chk(res)[0];
+      if (!r) throw new Error('你沒有修改分類的權限。');
+      cache.categories = (cache.categories || []).filter(function (c) { return c.name !== r.name; }).concat([r]);
+      return r;
+    }).catch(function (e) {
+      var m = String(e && e.message || e);
+      if (/categories_pkey|duplicate key/.test(m)) throw new Error('已經有「' + name + '」這個分類。');
+      throw err(e);
+    });
+  }
+  /** 分類用掉幾個工項（含已封存） */
+  function countCategory(name) {
+    return sb.from('tasks').select('id', { count: 'exact', head: true }).eq('category', name).then(function (res) { if (res.error) throw res.error; return res.count || 0; }).catch(function (e) { throw err(e); });
+  }
+  function deleteCategory(name) {
+    return countCategory(name).then(function (n) {
+      if (n) throw new Error('「' + name + '」已有 ' + n + ' 個工項使用（含已封存），不能刪除。不再使用的話請取消勾選「使用中」。');
+      return sb.from('categories').delete().eq('name', name).select('name');
+    }).then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除分類的權限。');
+      cache.categories = cache.categories.filter(function (c) { return c.name !== name; });
+      cache.personTypes = (cache.personTypes || []).filter(function (x) { return x.category !== name; });
+      cache.templates.forEach(function (t) { if (t.category === name) t.category = null; });
+    }).catch(function (e) { throw err(e); });
+  }
+  /** rows: [{person, category, level, days, note}]；同一人同一分類會覆蓋 */
+  function savePersonTypes(rows) {
+    var clean = rows.map(function (o) {
+      var lv = Math.min(3, Math.max(1, Number(o.level) || 1));
+      var d = o.days === '' || o.days === null || o.days === undefined ? null : Number(o.days);
+      if (d !== null && (isNaN(d) || d < 0)) throw new Error('天數要是 0 以上的數字。');
+      return { person: o.person, category: o.category, level: lv, days: d, note: o.note || '' };
+    });
+    return sb.from('person_types').upsert(clean, { onConflict: 'person,category' }).select().then(function (res) {
+      var saved = chk(res);
+      if (saved.length < clean.length) throw new Error('你沒有修改人員工項的權限。');
+      var key = function (x) { return x.person + '\u0000' + x.category; }, k = {};
+      saved.forEach(function (x) { k[key(x)] = 1; });
+      cache.personTypes = (cache.personTypes || []).filter(function (x) { return !k[key(x)]; }).concat(saved);
+      return saved;
+    }).catch(function (e) { throw err(e); });
+  }
+  function deletePersonType(person, category) {
+    return sb.from('person_types').delete().eq('person', person).eq('category', category).select('person').then(function (res) {
+      if (!chk(res).length) throw new Error('你沒有刪除人員工項的權限。');
+      cache.personTypes = cache.personTypes.filter(function (x) { return !(x.person === person && x.category === category); });
     }).catch(function (e) { throw err(e); });
   }
   /* 新標籤：隨機給一個目前用得最少的色號 */
@@ -1030,7 +1229,7 @@ var API = (function () {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
-    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),

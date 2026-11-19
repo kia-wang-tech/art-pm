@@ -49,8 +49,9 @@ function renderGantt(c) {
     G.pos[t.id] = { a: a, b: b, y: i * RH + RH / 2, row: i };
     var ed = canEdit(t), movable = ed && (t.status === '未開始' || t.status === '暫停'), sizable = ed && t.status !== '完成' && t.status !== '取消';
     var cls = 'gbar' + (t.mode === '平行' ? ' par' : '') + (worst(t) === 'd' ? ' bad' : '') + (t.status === '完成' ? ' done' : '') + (movable ? '' : ' ro');
-    h += '<div class="' + cls + '" data-id="' + esc(t.id) + '" data-mv="' + (movable ? 1 : 0) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 8) + 'px;top:' + (i * RH + 6) + 'px;background-color:' + r.color + '" title="' + esc(t.title + '\n' + (t.owner || '未指派') + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天｜' + t.status + ((t.warns || []).length ? '\n⚠ ' + t.warns.join('\n⚠ ') : '')) + '">' +
+    h += '<div class="' + cls + '" data-id="' + esc(t.id) + '" data-mv="' + (movable ? 1 : 0) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 8) + 'px;top:' + (i * RH + 6) + 'px;background-color:' + r.color + '" title="' + esc(t.title + '\n' + (t.owner || '未指派') + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天｜' + t.status + leaveText(t) + ((t.warns || []).length ? '\n⚠ ' + t.warns.join('\n⚠ ') : '')) + '">' +
       '<span class="lbl">' + (S.ganttScale !== 'month' ? esc(t.title) : '') + '</span>' + (sizable ? '<span class="rz"></span>' : '') + (ed ? '<span class="lk" title="拉到另一個工項：設定它要等這項完成"></span>' : '') + '</div>';
+    h += leaveMarks(t, i * RH + 6, x, W);
     if (t.release && dn(t.release) >= min && dn(t.release) <= max) h += '<div class="grel" style="left:' + (x(dn(t.release)) + W) + 'px;top:' + (i * RH + 12) + 'px" title="出版日 ' + esc(t.release) + '"></div>';
   });
   h += '<svg class="arrows" id="gSvg" width="' + width + '" height="' + height + '"><defs><marker id="arr" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor" stroke="none"/></marker></defs>' + arrowPaths(list) + '</svg>';
@@ -69,6 +70,25 @@ function renderGantt(c) {
   });
   bindGanttDrag($('#gBody'));
   highlight();
+}
+/** 工項長條上標出負責人／內部協力在這段期間的休假日（只顯示「休假」，不顯示假別） */
+function leaveSpans(t) {
+  if (t.mode === '平行' || !t.start || !t.end) return [];
+  var who = [t.owner].concat(Engine.splitNames(t.helper).filter(isStaff)).filter(Boolean), a0 = dn(t.start), b0 = dn(t.end), out = [];
+  (S.data.leaves || []).forEach(function (l) {
+    if (who.indexOf(l.person) < 0) return;
+    var a = Math.max(dn(l.start), a0), b = Math.min(dn(l.end) || dn(l.start), b0);
+    for (var d = a; d <= b; d++) {
+      if (isOff(d)) continue;
+      var e = d; while (e + 1 <= b && !isOff(e + 1)) e++;
+      out.push({ person: l.person, a: d, b: e }); d = e;
+    }
+  });
+  return out;
+}
+function leaveText(t) { var sp = leaveSpans(t); return sp.length ? '\n休假：' + sp.map(function (x) { return x.person + ' ' + md(ds(x.a)) + (x.b > x.a ? '–' + md(ds(x.b)) : ''); }).join('、') : ''; }
+function leaveMarks(t, top, x, W) {
+  return leaveSpans(t).map(function (sp) { return '<div class="gleave" style="left:' + x(sp.a) + 'px;width:' + ((sp.b - sp.a + 1) * W - 2) + 'px;top:' + top + 'px"></div>'; }).join('');
 }
 function arrowPaths(list) {
   var out = '';
