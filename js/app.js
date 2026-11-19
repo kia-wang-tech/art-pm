@@ -29,10 +29,10 @@ function toast(msg, err) {
   t.innerHTML = '<span class="tm"></span>' + (quick ? '' : '<button class="tx" title="關閉" aria-label="關閉">✕</button>');
   $('.tm', t).textContent = msg;
   var x = $('.tx', t); if (x) x.addEventListener('click', function () { t.remove(); });
-  box.appendChild(t);
+  box.insertBefore(t, box.firstChild);   // 新的在最上面
   if (quick) setTimeout(function () { t.remove(); }, 2500);
-  var all = $$('.toast:not(.quick)', box);
-  while (all.length > 5) all.shift().remove();
+  var all = $$('.toast', box);
+  while (all.length > 3) all.pop().remove();
 }
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
@@ -1087,8 +1087,21 @@ function renderBulkBar() {
   });
   $('#bkDel').addEventListener('click', function () {
     if (!confirm('刪除選取的 ' + editable.length + ' 個工項？刪除後無法復原。若只是不做了，建議改成「取消」狀態。')) return;
+    // 先刪沒有被其他工項當前置的；刪完再看剩下的，直到刪不動為止（還被選取範圍外的工項依賴的會保留）
+    var left = editable.slice(), n = 0;
+    var usedBy = function (t) { return S.data.tasks.some(function (x) { return x.id !== t.id && split(x.preds).indexOf(t.id) >= 0; }); };
+    var round = function () {
+      var can = left.filter(function (t) { return !usedBy(t); });
+      if (!can.length) return Promise.resolve();
+      left = left.filter(function (t) { return can.indexOf(t) < 0; });
+      return can.reduce(function (pr, t) { return pr.then(function () { return call('deleteTask', t.id).then(function (r) { removeTask(t.id); applyComputed(r.computed); n++; }); }); }, Promise.resolve()).then(round);
+    };
     busy(true);
-    editable.reduce(function (pr, t) { return pr.then(function () { return call('deleteTask', t.id).then(function (r) { removeTask(t.id); applyComputed(r.computed); }); }); }, Promise.resolve())
-      .then(function () { busy(false); S.picked = {}; toast('已刪除'); render(); }).catch(function (e) { S.picked = {}; fail(e); render(); });
+    round().then(function () {
+      busy(false); S.picked = {};
+      if (left.length) { left.forEach(function (t) { S.picked[t.id] = 1; }); toast('已刪除 ' + n + ' 項；' + left.length + ' 項還有其他工項把它當前置，已保留並維持選取：' + left.slice(0, 5).map(function (t) { return t.title; }).join('、') + (left.length > 5 ? '…' : ''), true); }
+      else toast('已刪除 ' + n + ' 項');
+      render();
+    }).catch(function (e) { S.picked = {}; fail(e); render(); });
   });
 }

@@ -373,7 +373,7 @@ svg.arrows path.tmp { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4;
 .mfoot { display: flex; gap: 8px; margin-top: 18px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* ---------- 通知 ---------- */
-.toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+.toasts { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast { background: var(--ink); color: var(--surface); padding: 10px 10px 10px 16px; border-radius: 8px; font-size: 13px; max-width: min(560px, calc(100vw - 32px)); box-shadow: var(--pop-shadow); pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
 .toast.quick { padding-right: 16px; }
 .toast .tx { background: none; border: 0; color: inherit; opacity: .7; cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1.5; }

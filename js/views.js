@@ -945,7 +945,7 @@ function openDeleteProject(p) {
 }
 
 /* ---------------- 設定 ---------------- */
-var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['vendors', '外包', false], ['categories', '工項分類', true], ['calendar', '行事曆', false], ['templates', '範本', false], ['leaves', '休假', false], ['remind', '提醒通知', true], ['years', '年度封存', true], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
+var SET_TABS = [['general', '一般設定', true], ['people', '人員', false], ['vendors', '外包', false], ['categories', '工項分類', true], ['templates', '範本', false], ['calendar', '行事曆', false], ['leaves', '休假', false], ['remind', '提醒通知', true], ['years', '年度封存', true], ['import', '匯入與還原', true], ['log', '修改紀錄', false]];
 function adminRefresh() { S.data = API.refresh(S.data.history); index(); }
 function renderSettings(c) {
   setTitle('<span class="t">設定</span>');
