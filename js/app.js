@@ -37,7 +37,7 @@ function toast(msg, err) {
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
-var WRITE_FNS = { deleteProject: 1, saveCategory: 1, deleteCategory: 1, savePersonTypes: 1, deletePersonType: 1, autoAssignTasks: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
+var WRITE_FNS = { applyUndo: 1, deleteProject: 1, saveCategory: 1, deleteCategory: 1, savePersonTypes: 1, deletePersonType: 1, autoAssignTasks: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
   archivePeriod: 1, unarchivePeriod: 1, saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, saveDays: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
 var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
@@ -245,9 +245,59 @@ function saveLater(id, patch, fn, okMsg) {
   }).then(function () { syncCount--; syncUi(); if (!isEditing()) render(); });
 }
 /** 只改某幾個欄位（格內編輯用） */
-function patchTask(id, patch, okMsg) {
-  saveLater(id, patch, function (cur) { var o = Object.assign({ id: cur.id, at: cur.at }, patch); return call('saveTask', o); }, okMsg);
+function patchTask(id, patch, okMsg, group) {
+  saveLater(id, patch, function (cur) { var o = Object.assign({ id: cur.id, at: cur.at }, patch); if (group) o._undoGroup = group; return call('saveTask', o); }, okMsg);
 }
+
+/* ---------------- 復原／重做（Ctrl+Z、Ctrl+Y 或 Ctrl+Shift+Z） ----------------
+   記住自己在這個分頁裡的修改（最多 20 步）；重新整理後就清空。 */
+var UNDO = { done: [], redo: [], max: 20 };
+var U_LABEL = { title: '名稱', owner: '負責', helper: '協力', status: '狀態', days: '天數', preds: '前置', release: '出版日', earliest: '開始日', category: '分類', categoryCustom: '分類',
+  group: '群組', detail: '說明', note: '備註', pct: '完成度', doneQty: '完成數量', qty: '數量', lag: '前置後間隔', mode: '排程方式', tag: '標籤', code: '編號', project: '專案', astart: '實際開始', aend: '實際完成' };
+function undoLabel(e) {
+  var n = e.items.length, t = e.items[0] || {};
+  var title = t.title || (t.row && t.row.title) || '';
+  if (e.type === 'create') return n > 1 ? '新增 ' + n + ' 個工項' : '新增「' + title + '」';
+  if (e.type === 'delete') return n > 1 ? '刪除 ' + n + ' 個工項' : '刪除「' + title + '」';
+  var f = {};
+  e.items.forEach(function (it) { it.fields.forEach(function (k) { if (U_LABEL[k]) f[U_LABEL[k]] = 1; }); });
+  var fs = Object.keys(f).slice(0, 3).join('、') || '修改';
+  return (n > 1 ? n + ' 個工項的' : '「' + title + '」的') + fs;
+}
+function recordUndo(e) {
+  var top = UNDO.done[UNDO.done.length - 1];
+  if (e.group && top && top.group === e.group && top.type === e.type) top.items = top.items.concat(e.items);
+  else { UNDO.done.push(e); if (UNDO.done.length > UNDO.max) UNDO.done.shift(); }
+  UNDO.redo = [];
+}
+function runUndo(dir) {
+  var from = dir === 'undo' ? UNDO.done : UNDO.redo, to = dir === 'undo' ? UNDO.redo : UNDO.done;
+  if (S.preview) { toast(PREVIEW_MSG, true); return; }
+  if (!from.length) { toast(dir === 'undo' ? '沒有可以復原的修改' : '沒有可以重做的修改'); return; }
+  var e = from.pop();
+  syncCount++; syncUi();
+  syncChain = syncChain.then(function () { return call('applyUndo', e, dir); }).then(function (r) {
+    (r.removed || []).forEach(removeTask);
+    (r.tasks || []).forEach(upsert);
+    applyComputed(r.computed);
+    var did = (r.tasks || []).length + (r.removed || []).length;
+    if (!did && r.skipped.length) { toast('無法' + (dir === 'undo' ? '復原' : '重做') + '：' + undoLabel(e) + '。' + r.skipped.slice(0, 3).join('、'), true); return; }
+    to.push(e);
+    toast((dir === 'undo' ? '已復原：' : '已重做：') + undoLabel(e) + (r.skipped.length ? '；略過 ' + r.skipped.length + ' 項：' + r.skipped.slice(0, 3).join('、') : ''), r.skipped.length > 0);
+  }).catch(function (er) { toast((dir === 'undo' ? '復原' : '重做') + '失敗：' + (er.message || er), true); })
+    .then(function () { syncCount--; syncUi(); if (!isEditing()) render(); });
+}
+document.addEventListener('keydown', function (e) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || COMPOSING || e.isComposing) return;
+  var k = (e.key || '').toLowerCase();
+  var isUndo = k === 'z' && !e.shiftKey, isRedo = k === 'y' || (k === 'z' && e.shiftKey);
+  if (!isUndo && !isRedo) return;
+  var el = e.target;
+  if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;   // 打字中：交給瀏覽器的復原
+  if ($('.modal') || !S.data) return;
+  e.preventDefault();
+  runUndo(isUndo ? 'undo' : 'redo');
+});
 function isEditing() {
   if (COMPOSING) return true;
   var a = document.activeElement;
@@ -1090,7 +1140,8 @@ function renderBulkBar() {
   });
   $('#bkOw').addEventListener('click', function (e) {
     popOwner(e.currentTarget, null, function (name) {
-      editable.forEach(function (t) { patchTask(t.id, { owner: name }); });
+      var g = 'own' + Date.now();
+      editable.forEach(function (t) { patchTask(t.id, { owner: name }, null, g); });
       S.picked = {}; toast('已指派 ' + editable.length + ' 項給 ' + (name || '未指派'));
     });
   });
@@ -1107,13 +1158,13 @@ function renderBulkBar() {
   $('#bkDel').addEventListener('click', function () {
     if (!confirm('刪除選取的 ' + editable.length + ' 個工項？刪除後無法復原。若只是不做了，建議改成「取消」狀態。')) return;
     // 先刪沒有被其他工項當前置的；刪完再看剩下的，直到刪不動為止（還被選取範圍外的工項依賴的會保留）
-    var left = editable.slice(), n = 0;
+    var left = editable.slice(), n = 0, g = 'del' + Date.now();
     var usedBy = function (t) { return S.data.tasks.some(function (x) { return x.id !== t.id && split(x.preds).indexOf(t.id) >= 0; }); };
     var round = function () {
       var can = left.filter(function (t) { return !usedBy(t); });
       if (!can.length) return Promise.resolve();
       left = left.filter(function (t) { return can.indexOf(t) < 0; });
-      return can.reduce(function (pr, t) { return pr.then(function () { return call('deleteTask', t.id).then(function (r) { removeTask(t.id); applyComputed(r.computed); n++; }); }); }, Promise.resolve()).then(round);
+      return can.reduce(function (pr, t) { return pr.then(function () { return call('deleteTask', t.id, g).then(function (r) { removeTask(t.id); applyComputed(r.computed); n++; }); }); }, Promise.resolve()).then(round);
     };
     busy(true);
     round().then(function () {

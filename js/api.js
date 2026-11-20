@@ -323,6 +323,104 @@ var API = (function () {
     if (o.status && STATUSES.indexOf(o.status) < 0) throw new Error('狀態不正確。');
   }
 
+  /* ---------------- 復原／重做 ----------------
+     每次自己的修改會記成一筆：edit（欄位前後值＋改完後的版本）、create（新增的 ID）、delete（刪掉前的整筆資料）。
+     復原時用版本號確認之後沒人改過，才把欄位改回去；別人改過的就跳過，不蓋掉別人的修改。 */
+  var undoHook = null, undoGroup = null, replaying = false;
+  // 復原、重做本身也會讓版本號往上加；equiv[id][新版本] = 等同的舊版本，用來判斷「之後有沒有別人改過」
+  var equiv = {};
+  function sameVer(id, v) { var m = equiv[id] || {}, g = 0; while (m[v] !== undefined && g++ < 100) v = m[v]; return v; }
+  function markVer(id, now, as) { var m = equiv[id] = equiv[id] || {}; if (now === as) delete m[now]; else m[now] = as; }
+  var U_SKIP = { id: 1 };
+  function onUndoable(fn) { undoHook = fn; }
+  function emitUndo(e, group) { if (!undoHook || replaying) return; e.group = group || undoGroup || null; e.at = Date.now(); undoHook(e); }
+  function diffTask(a, b) {
+    var before = {}, after = {}, any = false;
+    Object.keys(T_MAP).forEach(function (k) {
+      if (U_SKIP[k]) return;
+      var x = a[k] === null || a[k] === undefined ? '' : String(a[k]), y = b[k] === null || b[k] === undefined ? '' : String(b[k]);
+      if (x !== y) { before[k] = a[k]; after[k] = b[k]; any = true; }
+    });
+    return any ? { before: before, after: after } : null;
+  }
+  function editItem(old, now) { var d = diffTask(old, now); return d ? { id: now.id, title: now.title, before: d.before, after: d.after, verAfter: now.version, verBefore: sameVer(now.id, old.version), fields: Object.keys(d.after) } : null; }
+  /** 把一筆工項的欄位設成 fields；狀態連動（實際日期、完成度）被系統改掉時再補一次 */
+  function setFields(id, fields, ver) {
+    var o = copyTask(fields); o.id = id; o.at = ver;
+    return saveTask(o).then(function (r) {
+      var now = cache.byId[id], left = {};
+      Object.keys(fields).forEach(function (k) { if (k === 'status') return; var a = now[k] === null || now[k] === undefined ? '' : String(now[k]), b = fields[k] === null || fields[k] === undefined ? '' : String(fields[k]); if (a !== b) left[k] = fields[k]; });
+      if (!Object.keys(left).length) return r;
+      left.id = id; left.at = now.version;
+      return saveTask(left);
+    });
+  }
+  function restoreRows(rows) {
+    if (!rows.length) return Promise.resolve([]);
+    // 前置要先存在：同一批裡被依賴的先加回來
+    var inBatch = {}, done = {}, order = [];
+    rows.forEach(function (t) { inBatch[t.id] = t; });
+    var visit = function (t, depth) { if (done[t.id] || depth > 500) return; done[t.id] = 1; split(t.preds).forEach(function (p) { if (inBatch[p]) visit(inBatch[p], depth + 1); }); order.push(t); };
+    rows.forEach(function (t) { visit(t, 0); });
+    var got = [];
+    return order.reduce(function (pr, t) {
+      return pr.then(function () {
+        var r = toDb(t); r.id = t.id; r.src = '還原';
+        return sb.from('tasks').insert(r).select().then(function (res) { var rr = chk(res); afterWrite(rr); rr.forEach(function (x) { got.push(x.id); }); });
+      });
+    }, Promise.resolve()).then(function () { return got; });
+  }
+  /** dir = 'undo' | 'redo'；回傳 {tasks, removed, computed, skipped:[文字]} */
+  function applyUndo(entry, dir) {
+    var undo = dir === 'undo', skipped = [], touched = [], removed = [];
+    replaying = true;
+    var seq = Promise.resolve();
+    if (entry.type === 'edit') {
+      entry.items.forEach(function (it) {
+        seq = seq.then(function () {
+          var cur = cache.byId[it.id];
+          if (!cur) { skipped.push(it.title + '（已刪除）'); return; }
+          var need = undo ? it.verAfter : it.verBefore;
+          if (sameVer(it.id, cur.version) !== need) { skipped.push(it.title + '（之後被修改過）'); return; }
+          return setFields(it.id, undo ? it.before : it.after, cur.version).then(function () {
+            var now = cache.byId[it.id]; markVer(it.id, now.version, undo ? it.verBefore : it.verAfter); touched.push(it.id);
+          }).catch(function (e) { skipped.push(it.title + (/剛被/.test(e.message) ? '（之後被別人修改過）' : '（' + e.message + '）')); });
+        });
+      });
+    } else if ((entry.type === 'create' && undo) || (entry.type === 'delete' && !undo)) {
+      // 刪掉：後面的先刪（下游先刪），刪不掉的跳過
+      var ids = entry.items.map(function (it) { return it.id || it.row.id; }).reverse();
+      ids.forEach(function (id) {
+        seq = seq.then(function () {
+          var cur = cache.byId[id];
+          if (!cur) return;
+          var it = entry.items.filter(function (x) { return (x.id || x.row.id) === id; })[0];
+          if (entry.type === 'create') { if (it.ver && sameVer(id, cur.version) !== it.ver) { skipped.push(cur.title + '（之後被修改過）'); return; } it.row = copyTask(cur); }
+          return deleteTask(id).then(function () { removed.push(id); }).catch(function (e) { skipped.push(cur.title + '（' + e.message + '）'); });
+        });
+      });
+    } else {
+      // 加回來：照原本的順序（上游先）
+      seq = seq.then(function () {
+        var rows = entry.items.map(function (it) { return it.row; }).filter(function (r) { return r && !cache.byId[r.id]; });
+        return restoreRows(rows).then(function (got) {
+          got.forEach(function (id) {
+            touched.push(id);
+            var it = entry.items.filter(function (x) { return (x.id || x.row.id) === id; })[0];
+            // 重建後版本從頭算：對應回刪除前（等同）的版本
+            var was = it && it.row ? sameVer(id, it.row.version) : null, nv = cache.byId[id].version;
+            equiv[id] = {};
+            if (was !== null && was !== nv) markVer(id, nv, was);
+          });
+        });
+      });
+    }
+    return seq.then(function () {
+      replaying = false;
+      return { tasks: touched.filter(function (id) { return cache.byId[id]; }).map(function (id) { return view(cache.byId[id]); }), removed: removed, computed: computedMap(), skipped: skipped };
+    }, function (e) { replaying = false; throw err(e); });
+  }
+
   function saveTask(obj) {
     validate(obj);
     if (!obj.id) return insertTasks([obj]).then(function (r) { return { task: r.tasks[0], computed: r.computed, changes: ['（新增）'], auto: r.auto }; });
@@ -356,6 +454,7 @@ var API = (function () {
         });
       }
       var o = afterWrite(rows);
+      var it = editItem(cur, cache.byId[cur.id]); if (it) emitUndo({ type: 'edit', items: [it] }, obj._undoGroup);
       o.task = view(cache.byId[cur.id]); o.changes = changes; o.autoReason = autoReason;
       return o;
     }).catch(function (e) { throw err(e); });
@@ -430,9 +529,10 @@ var API = (function () {
       if (!p.owner || (p.owner === t.owner && Number(p.days) === Number(t.days))) return;
       jobs.push(t);
     });
+    var g = 'auto' + Date.now();
     return jobs.reduce(function (pr, t) {
       var p = plan[list.indexOf(t)];
-      return pr.then(function () { return saveTask({ id: t.id, owner: p.owner, days: p.days }); });
+      return pr.then(function () { return saveTask({ id: t.id, owner: p.owner, days: p.days, _undoGroup: g }); });
     }, Promise.resolve()).then(function () {
       return { count: jobs.length, skipped: ids.length - list.length, tasks: list.map(function (t) { return view(cache.byId[t.id]); }), computed: computedMap(), results: results };
     });
@@ -481,6 +581,7 @@ var API = (function () {
         var o = afterWrite(rows2);
         o.tasks = full.map(function (t) { return view(cache.byId[t.id]); });
         o.created = full.map(function (t) { return t.id; });
+        emitUndo({ type: 'create', items: full.map(function (t) { return { id: t.id, title: t.title, ver: cache.byId[t.id] ? cache.byId[t.id].version : 1 }; }) });
         o.auto = full.filter(function (t) { return t.autoReason; }).map(function (t) { return { id: t.id, title: t.title, owner: t.owner, reason: t.autoReason }; });
         return o;
       });
@@ -576,12 +677,14 @@ var API = (function () {
     } catch (e) { return Promise.reject(err(e)); }
   }
 
-  function deleteTask(id) {
+  function deleteTask(id, group) {
+    var snap = cache.byId[id] ? copyTask(cache.byId[id]) : null;
     var users = cache.tasks.filter(function (x) { return split(x.preds).indexOf(id) >= 0; });
     if (users.length) return Promise.reject(new Error('還有 ' + users.length + ' 個工項把它當前置（' + users.slice(0, 5).map(function (x) { return x.id; }).join('、') + '）。請先移除相依，或把狀態改成「取消」。'));
     return sb.from('tasks').delete().eq('id', id).select('id').then(function (res) {
       if (!chk(res).length) throw new Error('你沒有刪除這個工項的權限。');
       dropTask(id); compute();
+      if (snap) emitUndo({ type: 'delete', items: [{ row: snap, title: snap.title }] }, group);
       return { id: id, computed: computedMap() };
     }).catch(function (e) { throw err(e); });
   }
@@ -594,11 +697,14 @@ var API = (function () {
   }
 
   function bulkStatus(ids, status) {
+    var olds = {}; ids.forEach(function (id) { if (cache.byId[id]) olds[id] = cache.byId[id]; });
     var jobs = [];
     for (var i = 0; i < ids.length; i += 200) jobs.push(sb.from('tasks').update({ status: status }).in('id', ids.slice(i, i + 200)).select().then(chk));
     return Promise.all(jobs).then(function (parts) {
       var rows = [].concat.apply([], parts);
       var o = afterWrite(rows);
+      var items = rows.map(function (r) { return olds[r.id] ? editItem(olds[r.id], cache.byId[r.id]) : null; }).filter(Boolean);
+      if (items.length) emitUndo({ type: 'edit', items: items });
       o.tasks = rows.map(function (r) { return view(cache.byId[r.id]); });
       return o;
     }).catch(function (e) { throw err(e); });
@@ -1229,7 +1335,7 @@ var API = (function () {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
-    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), applyUndo: mine(applyUndo), onUndoable: onUndoable, saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
