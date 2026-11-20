@@ -29,7 +29,7 @@ var API = (function () {
 
   var T_MAP = { id: 'id', project: 'project', group: 'grp', code: 'code', tag: 'tag', title: 'title', detail: 'detail', owner: 'owner',
     helper: 'helper', mode: 'mode', prio: 'prio', days: 'days', preds: 'preds', lag: 'lag', earliest: 'earliest', release: 'release',
-    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note', category: 'category' };
+    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note', category: 'category', categoryCustom: 'category_custom' };
   var T_DATES = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1 };
   var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1, pct: 1 };
 
@@ -38,7 +38,7 @@ var API = (function () {
       id: r.id, project: r.project, group: r.grp || '', code: r.code || '', tag: r.tag || '', title: r.title, detail: r.detail || '',
       owner: r.owner || '', helper: r.helper || '', mode: r.mode, prio: num(r.prio, ''), days: num(r.days, 0), preds: r.preds || '',
       lag: num(r.lag, 0), earliest: r.earliest || '', release: r.release || '', status: r.status, doneQty: num(r.done_qty, 0),
-      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', category: r.category || '', src: r.src || '',
+      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', category: r.category || '', categoryCustom: r.category_custom || '', src: r.src || '',
       by: r.updated_by || '', updatedAt: r.updated_at ? new Date(new Date(r.updated_at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '',
       at: r.version, version: r.version, archived: r.archived || ''
     };
@@ -380,7 +380,7 @@ var API = (function () {
       var cands = d.category ? (skills[d.category] || []) : [];
       if (!cands.length) {
         var t0 = copyTask(d); t0.owner = ''; base.push(t0);
-        out.push({ owner: '', days: d.days, level: 0, reason: d.category ? '沒有人員支援「' + d.category + '」，先不指派' : '沒有設定分類，無法自動指派' });
+        out.push({ owner: '', days: d.days, level: 0, reason: d.category ? '沒有人員支援「' + d.category + '」，先不指派' : d.categoryCustom ? '自訂分類不使用自動指派' : '沒有設定分類，無法自動指派' });
         return;
       }
       var tried = cands.map(function (c) {
@@ -447,7 +447,7 @@ var API = (function () {
           id: ids[i], project: o.project, group: o.group || '', code: o.code || '', tag: o.tag || '', title: String(o.title || '').trim(),
           detail: o.detail || '', owner: o.owner || '', helper: o.helper || '', mode: o.mode || '排隊', prio: o.prio === undefined ? '' : o.prio,
           days: num(o.days, 1), preds: o.preds || '', lag: num(o.lag, 0), earliest: o.earliest || '', release: o.release || '',
-          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || '', category: o.category || ''
+          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || '', category: o.category || '', categoryCustom: o.category ? '' : (o.categoryCustom || '')
         };
         validate(t);
         return t;
@@ -940,7 +940,7 @@ var API = (function () {
   var SHEETS = {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
-      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度', category: '分類' }],
+      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度', category: '分類', category_custom: '自訂分類' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註', icon: '圖示' }],
     people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
     vendors: ['外包', { name: '名稱', email: 'Email', type: '類型', alias: '別名', active: '合作', note: '備註' }],
@@ -993,7 +993,7 @@ var API = (function () {
       if (t.lag === null || isNaN(t.lag)) t.lag = 0;
       if (t.done_qty === null || isNaN(t.done_qty)) t.done_qty = 0;
       if (t.qty === null || isNaN(t.qty)) t.qty = 1;
-      t.archived = t.archived || null; t.category = t.category || null;
+      t.archived = t.archived || null; t.category = t.category || null; t.category_custom = t.category_custom || null;
       t.updated_by = '匯入'; t.updated_at = now; t.version = 1;
       return t;
     });

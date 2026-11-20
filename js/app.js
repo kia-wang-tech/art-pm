@@ -153,19 +153,22 @@ function tagColorOf(name) {
 function tagChip(name, extra) { return '<span class="tagc tg' + tagColorOf(name) + '">' + esc(name) + (extra ? ' ' + extra : '') + '</span>'; }
 /* ---------- 分類與人員工項 ---------- */
 var LV_NAME = { 1: '主要', 2: '次要', 3: '可支援' };
+function catOf(t) { return (t && (t.category || t.categoryCustom)) || ''; }
+function isCustomCat(t) { return !!(t && !t.category && t.categoryCustom); }
 function catList(cur) { return (S.data.categories || []).filter(function (c) { return c.active || c.name === cur; }).map(function (c) { return c.name; }); }
 function hasCats() { return (S.data.categories || []).length > 0; }
 function skillsOf(cat) { return (S.data.skills || {})[cat] || []; }
 function skillOf(name, cat) { var x = skillsOf(cat).filter(function (k) { return k.person === name; })[0]; return x || null; }
 function skillLabel(k) { return LV_NAME[k.level] + (k.days !== null && k.days !== undefined ? '・' + k.days + ' 天' : ''); }
 /** 負責人下拉選單：自動指派 → 支援這個分類的人 →（顯示全部人員）→ 未指派 */
-function ownerOptionsHtml(cat, current, showAll) {
-  var sk = skillsOf(cat), names = {}, h = '<option value="__auto"' + (current === '__auto' ? ' selected' : '') + '>自動指派</option>';
+function ownerOptionsHtml(cat, current, showAll, custom) {
+  if (custom) { cat = ''; showAll = true; if (current === '__auto') current = ''; }
+  var sk = skillsOf(cat), names = {}, h = custom ? '' : '<option value="__auto"' + (current === '__auto' ? ' selected' : '') + '>自動指派</option>';
   if (sk.length) {
     h += '<optgroup label="支援「' + esc(cat) + '」的人員">' + sk.map(function (k) { names[k.person] = 1; return '<option value="' + esc(k.person) + '"' + (k.person === current ? ' selected' : '') + '>' + esc(k.person) + '（' + skillLabel(k) + '）</option>'; }).join('') + '</optgroup>';
   }
   var others = S.data.people.filter(function (p) { return !names[p.name] && (showAll || !sk.length || p.name === current); });
-  if (others.length) h += '<optgroup label="' + (sk.length ? '其他人員' : (cat ? '還沒有人設定支援這個分類' : '全部人員')) + '">' + others.map(function (p) { return '<option value="' + esc(p.name) + '"' + (p.name === current ? ' selected' : '') + '>' + esc(p.name) + (p.role !== '美術' ? '（' + p.role + '）' : '') + '</option>'; }).join('') + '</optgroup>';
+  if (others.length) h += '<optgroup label="' + (sk.length ? '其他人員' : (cat ? '還沒有人設定支援這個分類' : (custom ? '自訂分類：可以指派給任何人' : '全部人員'))) + '">' + others.map(function (p) { return '<option value="' + esc(p.name) + '"' + (p.name === current ? ' selected' : '') + '>' + esc(p.name) + (p.role !== '美術' ? '（' + p.role + '）' : '') + '</option>'; }).join('') + '</optgroup>';
   if (sk.length && !showAll) h += '<option value="__all">顯示全部人員…</option>';
   h += '<option value=""' + (current === '' ? ' selected' : '') + '>未指派</option>';
   return h;
@@ -539,9 +542,9 @@ function filtered(list) {
     if (S.status && t.status !== S.status) return false;
     if (S.group && t.group !== S.group) return false;
     if (S.tag && splitTags(t.tag).indexOf(S.tag) < 0) return false;
-    if (S.cat && (S.cat === '（未設定）' ? t.category : t.category !== S.cat)) return false;
+    if (S.cat && (S.cat === '（未設定）' ? catOf(t) : catOf(t) !== S.cat)) return false;
     if (S.onlyWarn && !(t.warns || []).length) return false;
-    if (q && (t.id + ' ' + t.title + ' ' + t.detail + ' ' + t.group + ' ' + t.owner + ' ' + t.helper + ' ' + t.tag + ' ' + t.code + ' ' + (t.category || '')).toLowerCase().indexOf(q) < 0) return false;
+    if (q && (t.id + ' ' + t.title + ' ' + t.detail + ' ' + t.group + ' ' + t.owner + ' ' + t.helper + ' ' + t.tag + ' ' + t.code + ' ' + catOf(t)).toLowerCase().indexOf(q) < 0) return false;
     return true;
   });
 }
@@ -549,7 +552,7 @@ function filtered(list) {
 function filterOptions(pid) {
   var owners = {}, groups = {}, tags = {}, cats = {};
   projectTasks(pid).forEach(function (t) {
-    cats[t.category || '（未設定）'] = 1;
+    cats[catOf(t) || '（未設定）'] = 1;
     if (t.owner) owners[t.owner] = 1;
     Engine.splitNames(t.helper).forEach(function (n) { owners[n] = owners[n] || 2; });
     if (t.group) groups[t.group] = 1;
@@ -706,7 +709,8 @@ function renderBoard(c) {
   var p = projById[S.route.project];
   projectHeader(p, 'board');
   var P = periodSel(); if (P && P.archived) return renderArchived(c, p, P);
-  var list = filtered(projectTasks(p.id)).sort(sortTasks);
+  // 主表格照建立順序（套用範本＝範本步驟順序）
+  var list = filtered(projectTasks(p.id)).sort(function (a, b) { return a.id.localeCompare(b.id); });
   var groups = groupsOf(list);
   var h = filterBar(p.id, '<button class="btn ghost hide-m" id="colBtn" title="調整表格欄位的順序與寬度">欄位</button>') + '<div class="board">';
   if (!list.length) {
@@ -793,7 +797,7 @@ function rowHtml(t, color, tmin, tmax, cols) {
   var cell = {
     title: '<td class="title" data-open="1"><div class="tt"><span class="n">' + esc(t.title) + '</span>' + (t.mode === '平行' ? '<span class="chip" title="不佔用負責人時間">平行</span>' : '') + (cols.some(function (c) { return c.k === 'tags'; }) ? '' : splitTags(t.tag).map(function (x) { return tagChip(x); }).join('')) + '<span class="id">' + esc(t.id) + '</span><button class="open">開啟</button></div></td>',
     owner: '<td class="owner cell' + (ed ? '' : ' ro') + '" data-ed="owner">' + person(t.owner) + (hl.length ? '<span class="hlp" title="協力：' + esc(hl.join('、')) + '">+' + hl.length + '</span>' : '') + '</td>',
-    category: '<td class="cell' + (ed ? '' : ' ro') + '" data-ed="category">' + (t.category ? esc(t.category) : '<span class="faint">—</span>') + '</td>',
+    category: '<td class="cell' + (ed ? '' : ' ro') + '" data-ed="category">' + (t.category ? esc(t.category) : t.categoryCustom ? '<span title="自訂分類（不使用自動指派）" style="font-style:italic">' + esc(t.categoryCustom) + '</span>' : '<span class="faint">—</span>') + '</td>',
     status: '<td class="status cell' + (up ? '' : ' ro') + '" data-ed="status"><div class="st-' + esc(t.status) + '">' + esc(t.status) + '</div></td>',
     timeline: '<td class="timeline cell ro">' + tl + '</td>',
     days: '<td class="num cell' + (ed ? '' : ' ro') + '" data-ed="days">' + esc(t.days) + '</td>',
@@ -840,10 +844,11 @@ function bindBoard(c, p) {
       if (e.key !== 'Enter' || !inp.value.trim()) return;
       if (e.isComposing) return;
       var title = inp.value.trim(), grp = inp.dataset.addg;
-      var create = function (cat) {
+      var create = function (cat, custom) {
         inp.value = ''; inp.disabled = true;
         var o = { project: p.id, group: grp, title: title, days: 1 };
-        if (cat) { o.category = cat; o.owner = '__auto'; }
+        if (cat && custom) o.categoryCustom = cat;
+        else if (cat) { o.category = cat; o.owner = '__auto'; }
         call('saveTask', o).then(function (r) {
           upsert(r.task); applyComputed(r.computed);
           var au = (r.auto || [])[0];
@@ -853,7 +858,7 @@ function bindBoard(c, p) {
       };
       e.preventDefault();
       // 有分類時先選分類（必填），再依分類自動指派
-      if (hasCats()) popCategory(inp, '', create); else create('');
+      if (hasCats()) popCategory(inp, '', create, true); else create('');
     });
   });
   var ag = $('#addGroup');
@@ -874,11 +879,22 @@ function openPop(anchor, html, width) {
   var p = document.createElement('div'); p.className = 'pop'; p.innerHTML = html;
   if (width) p.style.width = width + 'px';
   document.body.appendChild(p); POP = p;
-  var r = anchor.getBoundingClientRect(), pw = p.offsetWidth, ph = p.offsetHeight;
-  var x = Math.min(r.left, window.innerWidth - pw - 8), y = r.bottom + 4;
-  if (y + ph > window.innerHeight - 8) y = Math.max(8, r.top - ph - 4);
-  p.style.left = Math.max(8, x) + 'px'; p.style.top = y + 'px';
+  fitPop(p, anchor);
+  // 內容通常在開啟後才填入，填完再對齊一次，避免靠近畫面底部時跑出畫面
+  requestAnimationFrame(function () { if (p.isConnected) fitPop(p, anchor); });
   return p;
+}
+/** 把彈出視窗放在 anchor 下方；下方放不下就放上方；兩邊都不夠時放空間大的一邊並限制高度 */
+function fitPop(p, anchor) {
+  var r = anchor.getBoundingClientRect(), vh = window.innerHeight;
+  p.style.maxHeight = p.dataset.mh || '';
+  var pw = p.offsetWidth, ph = p.offsetHeight, below = vh - r.bottom - 12, above = r.top - 12;
+  var x = Math.min(r.left, window.innerWidth - pw - 8), y;
+  if (ph <= below) y = r.bottom + 4;
+  else if (ph <= above) y = r.top - ph - 4;
+  else if (above > below) { p.style.maxHeight = above + 'px'; y = r.top - Math.min(ph, above) - 4; }
+  else { p.style.maxHeight = below + 'px'; y = r.bottom + 4; }
+  p.style.left = Math.max(8, x) + 'px'; p.style.top = Math.max(8, y) + 'px';
 }
 /* 可搜尋的下拉選單：電腦上點開任何 <select>，都改成可以打字篩選的選單（手機維持原生選單） */
 var SEL_POP = null;
@@ -942,10 +958,11 @@ function editCell(td, t, field) {
     var nd = name ? daysForOwner(t, name) : null, patch = { owner: name };
     if (nd !== null) patch.days = nd;
     patchTask(t.id, patch, name ? '已指派給 ' + name + (nd !== null ? '，天數改為 ' + name + ' 的預設 ' + nd + ' 天' : '') : '');
-  }, t.category);
-  if (field === 'category') return popCategory(td, t.category, function (v) {
-    patchTask(t.id, { category: v }, v && t.owner && !skillOf(t.owner, v) && skillsOf(v).length ? '分類改為「' + v + '」；注意：' + t.owner + ' 沒有設定支援這個分類' : '');
-  });
+  }, isCustomCat(t) ? undefined : t.category);
+  if (field === 'category') return popCategory(td, catOf(t), function (v, custom) {
+    if (custom) { patchTask(t.id, { category: '', categoryCustom: v }, '分類改為自訂「' + v + '」'); return; }
+    patchTask(t.id, { category: v, categoryCustom: '' }, v && t.owner && !skillOf(t.owner, v) && skillsOf(v).length ? '分類改為「' + v + '」；注意：' + t.owner + ' 沒有設定支援這個分類' : '');
+  }, true);
   if (field === 'days') return popNumber(td, t.days, '天數（工作天）', function (v) { patchTask(t.id, { days: v }, impactMsg); });
   if (field === 'release') return popDate(td, t.release, '出版日／期限', function (v) { patchTask(t.id, { release: v }); });
   if (field === 'preds') return popPreds(td, t);
@@ -958,19 +975,21 @@ function popStatus(anchor, t, cb) {
   }).join(''), 170);
   $$('.sopt', p).forEach(function (el) { el.addEventListener('click', function () { if (el.classList.contains('dis')) return; closePop(); if (el.dataset.s !== t.status) cb(el.dataset.s); }); });
 }
-function popCategory(anchor, current, cb) {
+function popCategory(anchor, current, cb, allowCustom) {
   var list = catList(current);
-  if (!list.length) { toast('還沒有分類，請管理員到「設定 → 工項分類」建立。', true); return; }
-  var p = openPop(anchor, '<input class="field" placeholder="搜尋分類" id="popQ"><div id="popL"></div>', 220);
+  if (!list.length && !allowCustom) { toast('還沒有分類，請管理員到「設定 → 工項分類」建立。', true); return; }
+  var p = openPop(anchor, '<input class="field" placeholder="' + (allowCustom ? '搜尋分類，或輸入自訂分類' : '搜尋分類') + '" id="popQ"><div id="popL"></div>', 240);
   var hi = 0, shown = [];
   var draw = function () {
     var q = $('#popQ').value.trim().toLowerCase();
-    shown = list.filter(function (x) { return !q || x.toLowerCase().indexOf(q) >= 0; });
+    var raw = $('#popQ').value.trim();
+    shown = list.filter(function (x) { return !q || x.toLowerCase().indexOf(q) >= 0; }).map(function (x) { return { v: x }; });
+    if (allowCustom && raw && list.indexOf(raw) < 0) shown.push({ v: raw, custom: true });
     hi = Math.min(hi, Math.max(0, shown.length - 1));
-    $('#popL').innerHTML = shown.map(function (x, i) { return '<div class="opt' + (x === current ? ' on' : '') + (i === hi ? ' hi' : '') + '" data-i="' + i + '">' + esc(x) + '</div>'; }).join('') || '<div class="lab">找不到</div>';
+    $('#popL').innerHTML = shown.map(function (x, i) { return '<div class="opt' + (x.v === current ? ' on' : '') + (i === hi ? ' hi' : '') + '" data-i="' + i + '">' + (x.custom ? '＋ 自訂分類「' + esc(x.v) + '」<span class="faint" style="font-size:12px">（不自動指派）</span>' : esc(x.v)) + '</div>'; }).join('') || '<div class="lab">' + (allowCustom ? '輸入名稱可以建立自訂分類' : '找不到') + '</div>';
     $$('.opt', p).forEach(function (el) { el.addEventListener('click', function () { pick(shown[+el.dataset.i]); }); });
   };
-  var pick = function (x) { if (x === undefined) return; closePop(); if (x !== current) cb(x); };
+  var pick = function (x) { if (!x) return; closePop(); if (x.v !== current || x.custom) cb(x.v, !!x.custom); };
   $('#popQ').addEventListener('input', function () { hi = 0; draw(); });
   $('#popQ').addEventListener('keydown', function (e) {
     if (e.key === 'ArrowDown') { hi = Math.min(hi + 1, shown.length - 1); draw(); e.preventDefault(); }

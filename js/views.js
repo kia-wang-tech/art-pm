@@ -246,8 +246,9 @@ function drawerBody() {
   /* ---- 規劃（PM） ---- */
   h += '<div class="sect"><div class="sect-h">' + (isNew ? '' : '規劃') + (!full && !isNew ? '<span class="faint">由 PM 設定</span>' : '') + '</div><div class="props">';
   var cats = catList(t.category);
-  h += '<label>分類' + (isNew && hasCats() ? ' <span style="color:var(--danger)">*</span>' : '') + '</label><div><select class="field" name="category"' + (full ? '' : ' disabled') + ' style="max-width:240px"><option value="">' + (hasCats() ? '選擇分類' : '（還沒有分類）') + '</option>' + cats.map(function (c) { return '<option' + (c === t.category ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>';
-  h += '<label>負責</label><div style="display:block"><div style="display:flex;gap:6px;align-items:center"><select class="field" name="owner"' + (full ? '' : ' disabled') + '>' + (full ? ownerOptionsHtml(t.category, isNew ? '__auto' : t.owner, false) : '<option>' + esc(t.owner || '未指派') + '</option>') + '</select>' + (full ? '<button type="button" class="btn sm" id="findOwner" style="white-space:nowrap">找有空的人</button>' : '') + '</div><div class="hint" id="ownHint" style="margin-top:2px"></div></div>';
+  var cust = isCustomCat(t);
+  h += '<label>分類' + (isNew && hasCats() ? ' <span style="color:var(--danger)">*</span>' : '') + '</label><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select class="field" name="category"' + (full ? '' : ' disabled') + ' style="max-width:240px"><option value="">' + (hasCats() ? '選擇分類' : '（還沒有分類）') + '</option>' + cats.map(function (c) { return '<option' + (c === t.category ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '<option value="__custom"' + (cust ? ' selected' : '') + '>＋ 自訂分類…</option></select><input class="field" name="categoryCustom" value="' + esc(t.categoryCustom || '') + '" placeholder="輸入自訂分類" style="max-width:200px' + (cust ? '' : ';display:none') + '"' + (full ? '' : ' disabled') + '></div>';
+  h += '<label>負責</label><div style="display:block"><div style="display:flex;gap:6px;align-items:center"><select class="field" name="owner"' + (full ? '' : ' disabled') + '>' + (full ? ownerOptionsHtml(t.category, isNew ? '__auto' : t.owner, false, cust) : '<option>' + esc(t.owner || '未指派') + '</option>') + '</select>' + (full ? '<button type="button" class="btn sm" id="findOwner" style="white-space:nowrap">找有空的人</button>' : '') + '</div><div class="hint" id="ownHint" style="margin-top:2px"></div></div>';
   h += '<label>協力</label><div style="display:block"><input type="hidden" name="helper" value="' + esc(t.helper) + '"><div id="hlpBox"></div><div class="hint" style="margin-top:2px">內部人員會一起被排進時間；外包不影響排程</div></div>';
   h += '<label>天數</label><div>' + inp('days', 'number', full, ' style="max-width:120px"') + '<span class="hint" id="daysHint">工作天，可以有小數</span></div>';
   h += '<label>前置工項</label><div class="ac" style="display:block"><div id="predChips"></div>' + (full ? '<input class="field" id="predInput" placeholder="要先完成哪些工作？搜尋名稱或 ID" autocomplete="off" style="margin-top:4px"><div class="list2 hidden" id="predList"></div>' : '') + '</div>';
@@ -318,10 +319,13 @@ function bindOwnerUi() {
   if (D.isNew) { D.daysTouched = false; D.autoDays = null; }
   else { D.daysTouched = !!t.owner && !(k0 && k0.days !== null && Number(k0.days) === Number(t.days)); D.autoDays = k0 ? k0.days : null; }
   var prev = ownEl.value;
-  var cat = function () { return catEl ? catEl.value : ''; };
+  var custEl = $('[name=categoryCustom]', body);
+  var isCust = function () { return catEl && catEl.value === '__custom'; };
+  var cat = function () { return catEl && !isCust() ? catEl.value : ''; };
   var note = function () {
     var c = cat(), o = ownEl.value, sk = skillsOf(c), k = skillOf(o, c), h = '', dh = '工作天，可以有小數';
-    if (o === '__auto') {
+    if (isCust()) h = '自訂分類不進「工項分類」、不使用自動指派，可以指派給任何人';
+    else if (o === '__auto') {
       h = !c ? (hasCats() ? '請先選分類，系統才能依人員工項挑人' : '還沒有分類，無法自動指派；請管理員到「設定 → 工項分類」建立')
         : sk.length ? '儲存時依「設定 → 工項分類」的人員設定自動挑選（' + sk.length + ' 位支援「' + c + '」）' : '沒有人員設定支援「' + c + '」，儲存後會先不指派';
       if (sk.length && !D.daysTouched) dh = '自動指派後會改成該人員的預設天數';
@@ -332,11 +336,17 @@ function bindOwnerUi() {
     $('#ownHint').innerHTML = h; $('#daysHint').innerHTML = dh;
     var u = $('#daysUse'); if (u) u.addEventListener('click', function () { daysEl.value = k.days; D.autoDays = k.days; D.daysTouched = false; note(); previewSoon(); });
   };
-  if (catEl) catEl.addEventListener('change', function () { var cur = ownEl.value; ownEl.innerHTML = ownerOptionsHtml(cat(), cur, false); if (ownEl.value !== cur) ownEl.value = cur; prev = ownEl.value; note(); });
+  if (catEl) catEl.addEventListener('change', function () {
+    var cur = ownEl.value, cu = isCust();
+    if (custEl) { custEl.style.display = cu ? '' : 'none'; if (cu) setTimeout(function () { custEl.focus(); }, 0); }
+    ownEl.innerHTML = ownerOptionsHtml(cat(), cu && cur === '__auto' ? '' : cur, false, cu);
+    if (ownEl.value !== cur && !(cu && cur === '__auto')) ownEl.value = cur;
+    prev = ownEl.value; note();
+  });
   ownEl.addEventListener('change', function () {
     var o = ownEl.value;
     if (o === '__all') {
-      ownEl.innerHTML = ownerOptionsHtml(cat(), prev, true); ownEl.value = prev;
+      ownEl.innerHTML = ownerOptionsHtml(cat(), prev, true, isCust()); ownEl.value = prev;
       setTimeout(function () { if (window.matchMedia && matchMedia('(pointer: fine)').matches) openSelectPop(ownEl); }, 0);
       return;
     }
@@ -500,6 +510,10 @@ function formValues() {
   ['days', 'lag', 'doneQty', 'qty', 'pct'].forEach(function (k) { if (k in o && o[k] !== '') o[k] = Number(o[k]); });
   if ('pct' in o && o.pct !== '') o.pct = Math.max(0, Math.min(100, o.pct));
   if (o.owner === '__all') delete o.owner;
+  if ('category' in o) {
+    if (o.category === '__custom') { o.category = ''; o.categoryCustom = String(o.categoryCustom || '').trim(); }
+    else o.categoryCustom = '';
+  }
   if (o.owner === '__auto') o.keepDays = !!D.daysTouched;
   return o;
 }
@@ -525,7 +539,8 @@ var previewSoon = debounce(function () {
 function saveDrawer(again) {
   var o = formValues();
   if (D.full && !o.title) { toast('請填工項名稱', true); $('#dTitle').focus(); return; }
-  if (D.full && D.isNew && hasCats() && !o.category) { toast('請選擇分類', true); $('#dBody [name=category]').focus(); return; }
+  if (D.full && $('#dBody [name=category]') && $('#dBody [name=category]').value === '__custom' && !o.categoryCustom) { toast('請輸入自訂分類名稱', true); $('#dBody [name=categoryCustom]').focus(); return; }
+  if (D.full && D.isNew && hasCats() && !o.category && !o.categoryCustom) { toast('請選擇分類', true); $('#dBody [name=category]').focus(); return; }
   if (D.full && o.owner === '__auto' && !o.category) { toast('自動指派需要先選分類', true); $('#dBody [name=category]').focus(); return; }
   if (!D.isNew) {
     var id = D.cur.id, patch = {};
@@ -615,7 +630,7 @@ var BULK_COLS = [
   ['group', '群組', 140, '例如 新角色A'], ['title', '工項名稱', 200, '必填'], ['category', '分類', 110, '必填'], ['owner', '負責', 110, '空白＝自動指派'], ['days', '天數', 70, '空白＝預設'],
   ['preds', '前置', 110, '#1 或 T00123'], ['release', '出版日', 120, '2026-12-01'], ['detail', '說明', 200, '']
 ];
-var BULK_HELP = '前置可以填工項 ID，或用 #1、#2 表示這次的第幾列（例如第 2 列要等第 1 列完成就填 #1）。負責留空會依分類自動指派；天數留空會用負責人的預設天數。';
+var BULK_HELP = '前置可以填工項 ID，或用 #1、#2 表示這次的第幾列（例如第 2 列要等第 1 列完成就填 #1）。負責留空會依分類自動指派；天數留空會用負責人的預設天數。分類填不在清單裡的名稱會當成自訂分類（不自動指派）。';
 function openBulk() {
   var pid = S.route.project;
   var h = '<h3>批次新增工項</h3><div class="hint">直接在表格裡填，或從 Excel 複製多列後，點第一格貼上（Ctrl+V）。' + BULK_HELP + '</div>';
@@ -637,7 +652,6 @@ function openBulk() {
   var check = function (r) {
     if (!r.title) return Object.keys(r).some(function (k) { return String(r[k] || '').trim(); }) ? '缺工項名稱' : '';
     if (!r.category && hasCats()) return '缺分類';
-    if (r.category && !catOk[r.category]) return '沒有「' + r.category + '」這個分類';
     if (r.owner && !names[r.owner]) return '名單裡沒有「' + r.owner + '」';
     if (r.days !== '' && r.days !== undefined && (isNaN(Number(r.days)) || Number(r.days) < 0)) return '天數要是數字';
     if (r.release && !/^\d{4}-\d{2}-\d{2}$/.test(normDate(r.release))) return '日期格式：2026-12-01';
@@ -654,7 +668,8 @@ function openBulk() {
   };
   var summary = function () {
     var filled = rows.filter(function (r) { return r.title; }), bad = rows.filter(function (r) { return check(r); });
-    $('#bSum').textContent = filled.length ? filled.length + ' 個工項' + (bad.length ? '，' + bad.length + ' 列需要修正' : '') : '';
+    var cus = filled.filter(function (r) { return r.category && !catOk[r.category]; }).length;
+    $('#bSum').textContent = filled.length ? filled.length + ' 個工項' + (cus ? '（' + cus + ' 列是自訂分類，不自動指派）' : '') + (bad.length ? '，' + bad.length + ' 列需要修正' : '') : '';
     $('#bGo').disabled = !filled.length || bad.length > 0;
     $('#bGo').textContent = filled.length ? '新增 ' + filled.length + ' 個工項' : '新增';
   };
@@ -717,7 +732,8 @@ function openBulk() {
   $('#bGo').addEventListener('click', function () {
     var list = rows.filter(function (r) { return r.title; }).map(function (r) {
       var noDays = r.days === '' || r.days === undefined, sk = r.owner ? skillOf(r.owner, r.category) : null;
-      return { group: r.group || '', title: r.title, category: r.category || '', owner: r.owner || (r.category ? '__auto' : ''), keepDays: !noDays,
+      var real = !!(r.category && catOk[r.category]);
+      return { group: r.group || '', title: r.title, category: real ? r.category : '', categoryCustom: real ? '' : (r.category || ''), owner: r.owner || (real ? '__auto' : ''), keepDays: !noDays,
         days: noDays ? (sk && sk.days !== null ? sk.days : 1) : Number(r.days), preds: r.preds || '', release: normDate(r.release), detail: r.detail || '' };
     });
     // #n 指的是表格裡的列號；空白列會被略過，所以重新對應
@@ -751,12 +767,12 @@ function downloadBulkTemplate() {
   catList().forEach(function (c) { cs.addRow([c]); });
   var cn = Math.max(2, catList().length + 1);
   for (var r = 2; r <= 500; r++) {
-    ws.getCell('C' + r).dataValidation = { type: 'list', allowBlank: true, formulae: ['分類名單!$A$2:$A$' + cn], showErrorMessage: true, errorTitle: '沒有這個分類', error: '請從下拉選單選擇，或先請管理員新增分類。' };
+    ws.getCell('C' + r).dataValidation = { type: 'list', allowBlank: true, formulae: ['分類名單!$A$2:$A$' + cn], showErrorMessage: true, errorStyle: 'warning', errorTitle: '不在分類清單', error: '不在清單裡的名稱會當成自訂分類（不進工項分類、不自動指派）。要繼續嗎？' };
     ws.getCell('D' + r).dataValidation = { type: 'list', allowBlank: true, formulae: ['人員名單!$A$2:$A$' + n], showErrorMessage: true, errorTitle: '名單裡沒有這個人', error: '請從下拉選單選擇，或先請管理員新增人員。' };
     ws.getCell('E' + r).dataValidation = { type: 'decimal', operator: 'greaterThanOrEqual', allowBlank: true, formulae: [0], showErrorMessage: true, error: '天數要是 0 以上的數字' };
   }
   var note = wb.addWorksheet('說明');
-  [['欄位', '說明'], ['群組', '工項表上的分組，例如角色名稱或版本'], ['工項名稱', '必填'], ['分類', '必填，從下拉選單選'], ['負責', '從下拉選單選人員；空白＝依分類自動指派'], ['天數', '工作天，可以有小數（0.5）；空白＝負責人的預設天數（沒有預設時為 1）'],
+  [['欄位', '說明'], ['群組', '工項表上的分組，例如角色名稱或版本'], ['工項名稱', '必填'], ['分類', '必填，從下拉選單選；填不在清單裡的名稱會當成自訂分類（不自動指派）'], ['負責', '從下拉選單選人員；空白＝依分類自動指派'], ['天數', '工作天，可以有小數（0.5）；空白＝負責人的預設天數（沒有預設時為 1）'],
    ['前置', '要先完成的工作：填工項 ID（例如 T00123），或 #1、#2 表示這份檔案的第幾個工項；多個用逗號分隔'], ['出版日', '期限，格式 2026-12-01'], ['說明', '選填']].forEach(function (r, i) { var row = note.addRow(r); if (!i) row.font = { bold: true }; });
   note.getColumn(1).width = 12; note.getColumn(2).width = 90;
   return wb.xlsx.writeBuffer().then(function (buf) {
@@ -786,7 +802,7 @@ function openQueue(name) {
 function openFindOwner(btn) {
   var o = formValues(); o.id = D.cur.id;
   var pop = openPop(btn, '<div class="faint" style="padding:12px">計算中…</div>', Math.min(600, window.innerWidth - 16));
-  pop.style.maxWidth = 'none'; pop.style.maxHeight = '80vh'; pop.style.padding = '10px';
+  pop.style.maxWidth = 'none'; pop.dataset.mh = '80vh'; pop.style.maxHeight = '80vh'; pop.style.padding = '10px';
   setTimeout(function () {
     call('suggestOwners', o).then(function (rows) {
       if (!pop.isConnected) return;
@@ -1680,8 +1696,8 @@ var HELP = {
   ],
   'PM': [
     ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。', '專案設定左下角的「<b>刪除專案</b>」會連同所有工項（含已封存）永久刪除，要輸入專案名稱確認。只是結束的專案請改成「封存」。']],
-    ['分類與自動指派', ['每個工項都要選<b>分類</b>（例如 設定、立繪、Spine）。分類和每個分類可以做的人員，由管理員在「設定 → 工項分類」維護。', '負責人的第一個選項是「<b>自動指派</b>」：系統先在這個分類的<b>主要</b>人員裡挑最快完成的；<b>次要</b>或<b>可支援</b>人員要能趕上主要人員趕不上的期限，或提早「自動指派提早天數」以上完成，才會改派給他們。人選在建立時決定一次，之後不會自己變。', '展開負責人選單時只會列出支援這個分類的人（後面標主要／次要和預設天數）；要指派其他人選「顯示全部人員…」。', '選了某個人，天數會自動改成他的預設天數；如果天數已經手動改過，會保留你的數字，旁邊提示他的預設值，可以按「套用」。', '主表格勾選多個工項後按「<b>自動指派</b>」，會依期限先後重新分配未開始的工項，並列出每一項的指派原因。']],
-    ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、分類，負責可以用自動指派；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter，再選分類，會自動指派負責人。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。分類必填；負責留空＝自動指派，天數留空＝負責人的預設天數。']],
+    ['分類與自動指派', ['每個工項都要選<b>分類</b>（例如 設定、立繪、Spine）。分類和每個分類可以做的人員，由管理員在「設定 → 工項分類」維護。', '負責人的第一個選項是「<b>自動指派</b>」：系統先在這個分類的<b>主要</b>人員裡挑最快完成的；<b>次要</b>或<b>可支援</b>人員要能趕上主要人員趕不上的期限，或提早「自動指派提早天數」以上完成，才會改派給他們。人選在建立時決定一次，之後不會自己變。', '展開負責人選單時只會列出支援這個分類的人（後面標主要／次要和預設天數）；要指派其他人選「顯示全部人員…」。', '選了某個人，天數會自動改成他的預設天數；如果天數已經手動改過，會保留你的數字，旁邊提示他的預設值，可以按「套用」。', '主表格勾選多個工項後按「<b>自動指派</b>」，會依期限先後重新分配未開始的工項，並列出每一項的指派原因。', '零碎的工作可以用「<b>自訂分類</b>」：分類選單最後一項「＋ 自訂分類…」，或在搜尋框直接輸入新名稱。自訂分類不會加進「工項分類」，也不使用自動指派，負責人可以選任何人。']],
+    ['新增工項的四種方式', ['<b>新增工項</b>按鈕：只要填名稱、分類，負責可以用自動指派；前置、出版日等可在「更多設定」補。用「建立並繼續新增」可以連續建。', '<b>表格裡直接打</b>：每個群組最下面輸入名稱按 Enter，再選分類，會自動指派負責人（也可以直接輸入自訂分類）。主表格依建立順序排列，套用範本建立的工項會照範本步驟排。', '<b>套用範本</b>：一次建立一整串有相依的流程（例如 設定 → LoRA → 立繪 → 動態）。範本在「設定 → 範本」維護。', '<b>批次新增</b>：從 Excel 複製貼上，或下載空白範本填好再匯入。分類必填；負責留空＝自動指派，天數留空＝負責人的預設天數。']],
     ['在表格上編輯', ['直接點負責、狀態、天數、前置、出版日的格子就能改，存檔是自動的。', '右上「<b>欄位</b>」可以調整欄位順序、寬度和要不要顯示；也可以直接在表頭拖曳欄位、拉右邊緣調寬度。設定只存在你這台電腦。', '滑鼠停在工項名稱上，會顯示它的說明。', '勾選多筆後，下方會出現批次列：改狀態、指派給、刪除。先勾一項、再按住 <b>Shift</b> 勾另一項，可以把中間的工項一次勾起來。', '上方可以篩選負責人、群組、狀態、「只看有警示」，也可以切換考核年度。']],
     ['相依與排程', ['<b>前置工項</b>：前置完成後這項才能開始。可以在表格的前置格選，或在甘特圖拖曳工項右側的小圓點到另一個工項。', '<b>等前置完成後</b>幾天：前置完成後要隔幾個工作天才開始（例如等審核）。', '<b>排程方式</b>：「排隊」會佔用負責人的時間，同一人的工作依序排；「平行」不佔時間（例如監修、外包）。', '<b>協力</b>：可以複選內部人員和外包。內部人員會跟負責人一起被排進時間（他的其他工作會往後排）；外包只是記錄，不影響排程。', '<b>標籤</b>：一個工項可以有多個標籤，用逗號分開。輸入時會列出相似的舊標籤，選舊的可以避免同一件事有好幾種寫法；同一個標籤在各處都是同一個顏色。主表格上方可以用標籤篩選。', '甘特圖上拖曳整條＝設定最早開始日；拖右邊緣＝改天數。工項長條上的斜線區塊是負責人或協力的請假日（滑鼠移到長條上可以看是誰、什麼假）。', '「<b>人員排程</b>」的時間軸也可以直接拖曳：拖整條改開始日、拉右邊緣改天數，方便一次看所有人的負載再調整。', '<b>工作順序</b>由系統自動決定，不看建立順序：① 趕期限的（離出版日／期限只剩幾個工作天就得開始，天數在「設定 → 一般設定」調整）→ ② 完成後有其他人的工作在等的 → ③ 期限較早的（沒填期限的工作，會依下游工作的期限往前推算）→ ④ 其他。想讓某項提前，就設定它的期限。', '排第一的工作在等前置時，系統會把空檔內做得完的其他工作先排進來，不會讓排第一的工作晚開始。', '這只是預設建議：本人可以隨時先開始任何一項，也可以同時進行好幾項。「人員排程」點人名可以看每個人的順序和排序依據。', '<b>換負責人</b>：工項詳細的負責旁按「找有空的人」，會列出每個人接手後這項何時完成、四週負載、最早空檔，以及會讓他手上幾項工作延後。']],
     ['驗收', ['美術送驗收後，你的「我的工作」最上面會出現「<b>等你驗收</b>」，側欄也會顯示數字。', '確認沒問題按「確認完成」；需要修改按「退回修改」，工項會回到進行中，完成度重新回報。', '管理員可以在「設定 → 人員」幫你設定<b>管理專案</b>，設定後只會收到那些專案的驗收。']],
