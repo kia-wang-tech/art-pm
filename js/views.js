@@ -256,7 +256,7 @@ function drawerBody() {
   h += '<label>前置工項</label><div class="ac" style="display:block"><div id="predChips"></div>' + (full ? '<input class="field" id="predInput" placeholder="要先完成哪些工作？搜尋名稱或 ID" autocomplete="off" style="margin-top:4px"><div class="list2 hidden" id="predList"></div>' : '') + '</div>';
   h += '<label>出版日／期限</label><div>' + inp('release', 'date', full, ' style="max-width:180px"') + '</div>';
   h += '<label>群組</label><div>' + inp('group', 'text', full, ' list="grpList" placeholder="例如角色名稱或版本"') + '<datalist id="grpList">' + Object.keys(S.data.tasks.reduce(function (m, x) { if (x.project === t.project && x.group) m[x.group] = 1; return m; }, {})).map(function (g) { return '<option value="' + esc(g) + '">'; }).join('') + '</datalist></div>';
-  if (!isNew) h += '<label>系統預計</label><div><b>' + md(t.start) + ' – ' + md(t.end) + '</b>' + (t.baseline ? '<span class="faint">基準 ' + md(t.baseline) + '</span>' : '') + (t.slip > 0 ? '<span class="wtag w">晚 ' + t.slip + ' 天</span>' : '') + '</div>';
+  if (!isNew) h += '<label>系統預計</label><div style="flex-wrap:wrap"><b>' + md(t.start) + ' – ' + md(t.end) + '</b>' + (t.baseline ? '<span class="faint">基準 ' + md(t.baseline) + '</span>' : '') + (t.slip > 0 ? '<span class="wtag w">晚 ' + t.slip + ' 天</span>' : '') + (full && t.status !== '完成' && t.status !== '取消' && t.end && t.end !== t.baseline ? '<button type="button" class="btn sm ghost" id="dBase" title="把目前的預計完成日 ' + md(t.end) + ' 存成這項的基準">重設基準</button>' : '') + '</div>';
   if (!isNew && t.why && (t.status === '未開始' || t.status === '暫停')) h += '<label>排序依據</label><div style="display:block;font-size:13px">' + esc(whyText(t)) + '</div>';
   h += '</div>';
   h += '<details class="more"' + (D.moreOpen ? ' open' : '') + '><summary>更多設定</summary><div class="props">';
@@ -305,6 +305,10 @@ function drawerBody() {
   on('#dSave', function () { saveDrawer(false); });
   on('#dSaveNext', function () { saveDrawer(true); });
   on('#findOwner', function (e) { openFindOwner(e.currentTarget); });
+  on('#dBase', function () {
+    busy(true);
+    call('resetBaselineIds', [t.id]).then(function (r) { busy(false); (r.tasks || []).forEach(upsert); applyComputed(r.computed); toast('基準改為 ' + md(byId[t.id].baseline)); openTask(t.id); render(); }).catch(fail);
+  });
   on('#dDel', function () {
     if (!confirm('刪除「' + t.title + '」？刪除後無法復原。若只是不做了，建議把狀態改成「取消」。')) return;
     busy(true);
@@ -903,7 +907,9 @@ function openProject(p) {
   h += '<label class="full">負責的 PM（姓名，多位用逗號；空白＝所有 PM 都能改）<input class="field" id="pjPm" value="' + esc(p.pm) + '"' + (admin ? '' : ' disabled title="只有管理員能改"') + '></label>';
   h += '<label>開始日<input class="field" type="date" id="pjStart" value="' + esc(p.start) + '"></label><label>目標日<input class="field" type="date" id="pjTarget" value="' + esc(p.target) + '"></label>';
   h += '<label class="full">備註<input class="field" id="pjNote" value="' + esc(p.note) + '"></label></div>';
-  if (!isNew) h += '<div class="box" style="margin-top:14px"><b>重設基準</b>：把目前的預計完成日存成基準，之後延誤會顯示「比基準晚 N 天」。建議在專案計畫確定、或每個版本開始時做一次。<div style="margin-top:8px"><button class="btn sm" id="pjBase">重設基準</button></div></div>';
+  if (!isNew) h += '<div class="box" style="margin-top:14px"><b>重設基準</b>：把目前的預計完成日存成基準，之後延誤會顯示「比基準晚 N 天」。建議在專案計畫確定、或每個版本開始時做一次。' +
+    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm primary" id="pjReplan" title="未開始、有分類的工項重新自動指派負責人，日期跟著重算，再重設全專案的基準">重新安排並重設基準</button><button class="btn sm" id="pjBase" title="負責人不變，只把目前的預計完成日存成基準">只重設基準</button></div>' +
+    '<div class="hint" style="margin-top:6px">「重新安排」會把還沒開始的工項，依工項分類的人員設定重新挑選負責人（手動改過的天數會保留），日期自動重算；進行中、已完成、自訂分類的工項不動。可以按 Ctrl+Z 復原負責人的調整。只想重設某幾項，可以在主表格勾選後按「重設基準」，或在工項詳細裡重設。</div></div>';
   h += '<div class="mfoot">' + (!isNew && p.canEdit ? '<button class="btn danger" id="pjDel">刪除專案</button>' : '') + '<span style="flex:1"></span><button class="btn" id="pjC">取消</button><button class="btn primary" id="pjGo">' + (isNew ? '建立專案' : '儲存') + '</button></div>';
   modal(h);
   var dl = $('#pjDel'); if (dl) dl.addEventListener('click', function () { openDeleteProject(p); });
@@ -929,9 +935,20 @@ function openProject(p) {
       if (isNew) go('p/' + encodeURIComponent(r.id)); else render();
     }).catch(fail);
   });
+  var rp = $('#pjReplan');
+  if (rp) rp.addEventListener('click', function () {
+    if (!confirm('重新安排「' + p.name + '」？\n\n還沒開始、有分類的工項會重新自動指派負責人，日期跟著重算，接著把全專案未完成工項的基準改成新的預計完成日。')) return;
+    busy(true);
+    call('replanProject', p.id).then(function (r) {
+      (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); render();
+      var a = r.assign || { results: [], count: 0 };
+      if (a.results.length) autoResultModal('重新安排：' + a.count + ' 項換了負責人或天數，已重設 ' + r.count + ' 個工項的基準', a.results);
+      else toast('沒有需要重新指派的工項；已重設 ' + r.count + ' 個工項的基準');
+    }).catch(fail);
+  });
   var b = $('#pjBase');
   if (b) b.addEventListener('click', function () {
-    if (!confirm('把「' + p.name + '」所有未完成工項的基準，改成目前的預計完成日？')) return;
+    if (!confirm('把「' + p.name + '」所有未完成工項的基準，改成目前的預計完成日？負責人和日期都不會變。')) return;
     busy(true);
     call('resetBaseline', p.id).then(function (r) { (r.tasks || []).forEach(upsert); applyComputed(r.computed); busy(false); closeModal(); toast('已重設 ' + r.count + ' 個工項的基準'); render(); }).catch(fail);
   });
@@ -1703,7 +1720,7 @@ var HELP = {
     ['寫自評：下載年度工作排程', ['「我的工作」右上角按「<b>下載年度工作</b>」，選年度後下載 Excel。', '按月份列出你這段期間參與的所有工項（包含已封存的），格式和以前的個人排程表一樣。']]
   ],
   'PM': [
-    ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。', '專案設定左下角的「<b>刪除專案</b>」會連同所有工項（含已封存）永久刪除，要輸入專案名稱確認。只是結束的專案請改成「封存」。']],
+    ['建立專案', ['左側「專案」旁的「＋」建立新專案。', '進到專案後，右上角齒輪是<b>專案設定</b>：名稱、狀態、開始日、目標日、顏色。專案結束後把狀態改成「封存」，就不會出現在首頁。', '計畫排好後，在專案設定按「<b>重設基準</b>」，之後延誤會顯示「比基準晚 N 天」。「重新安排並重設基準」會先把還沒開始的工項重新自動指派負責人、重算日期再重設；「只重設基準」負責人不變。只想重設某幾項，可以在主表格勾選後按「重設基準」，或在工項詳細的「系統預計」旁按「重設基準」。', '專案設定左下角的「<b>刪除專案</b>」會連同所有工項（含已封存）永久刪除，要輸入專案名稱確認。只是結束的專案請改成「封存」。']],
     ['復原與重做', ['在表格、甘特圖、工項詳細做的修改（狀態、負責、天數、前置、日期、分類…），以及新增、刪除工項，都可以按 <b>Ctrl+Z</b> 復原、<b>Ctrl+Y</b>（或 Ctrl+Shift+Z）重做；Mac 用 ⌘。', '只記得自己在這個分頁裡最近 20 步，重新整理後就清空。批次操作（批次改狀態、指派、自動指派、刪除）算一步。', '如果之後別人又改了同一個工項，那一項會略過不復原，避免蓋掉別人的修改。', '正在輸入文字時，Ctrl+Z 是復原打字，不會影響工項。']],
     ['外包與保留時間', ['<b>外包天數</b>：外包要做的工作可以在同一個工項設定。「天數」填負責人自己要花的時間（例如監修 0.1 天），「外包天數」填外包要做幾天（例如 10 天）。系統先排外包的 10 天（不佔任何內部人員），外包做完後再排負責人的 0.1 天，完成日就是兩段都做完的日子。協力可以填外包廠商，方便查詢。', '甘特圖上，外包那一段是斜線（和「平行」一樣），負責人的工時是實心。', '<b>每月保留天數</b>：主管每月要花在會議、內部監修等不固定事務的時間，由管理員在「設定 → 人員」填，例如 5 天。系統會平均從他每個工作天的可排工時扣掉，排給他的工作會跟著拉長。']],
     ['分類與自動指派', ['每個工項都要選<b>分類</b>（例如 設定、立繪、Spine）。分類和每個分類可以做的人員，由管理員在「設定 → 工項分類」維護。', '負責人的第一個選項是「<b>自動指派</b>」：系統先在這個分類的<b>主要</b>人員裡挑最快完成的；<b>次要</b>或<b>可支援</b>人員要能趕上主要人員趕不上的期限，或提早「自動指派提早天數」以上完成，才會改派給他們。人選在建立時決定一次，之後不會自己變。', '展開負責人選單時只會列出支援這個分類的人（後面標主要／次要和預設天數）；要指派其他人選「顯示全部人員…」。', '選了某個人，天數會自動改成他的預設天數；如果天數已經手動改過，會保留你的數字，旁邊提示他的預設值，可以按「套用」。', '主表格勾選多個工項後按「<b>自動指派</b>」，會依期限先後重新分配未開始的工項，並列出每一項的指派原因。', '零碎的工作可以用「<b>自訂分類</b>」：分類選單最後一項「＋ 自訂分類…」，或在搜尋框直接輸入新名稱。自訂分類不會加進「工項分類」，也不使用自動指派，負責人可以選任何人。']],

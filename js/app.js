@@ -37,7 +37,7 @@ function toast(msg, err) {
 var busyN = 0;
 function busy(on) { busyN = Math.max(0, busyN + (on ? 1 : -1)); $('#loading').classList.toggle('hidden', !busyN); }
 function fail(e) { busyN = 1; busy(false); toast(e && e.message ? e.message : String(e), true); }
-var WRITE_FNS = { applyUndo: 1, deleteProject: 1, saveCategory: 1, deleteCategory: 1, savePersonTypes: 1, deletePersonType: 1, autoAssignTasks: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
+var WRITE_FNS = { applyUndo: 1, resetBaselineIds: 1, replanProject: 1, deleteProject: 1, saveCategory: 1, deleteCategory: 1, savePersonTypes: 1, deletePersonType: 1, autoAssignTasks: 1, saveVendor: 1, deleteVendor: 1, ensureTags: 1, setManagedProjects: 1, saveTask: 1, setStatus: 1, deleteTask: 1, reorderQueue: 1, applyTemplate: 1, bulkAdd: 1, bulkStatus: 1, saveProject: 1, resetBaseline: 1, saveLeave: 1,
   archivePeriod: 1, unarchivePeriod: 1, saveSetting: 1, savePerson: 1, deletePerson: 1, saveDay: 1, saveDays: 1, deleteDay: 1, saveTemplate: 1, deleteTemplate: 1, deleteLeave: 1, importPayload: 1 };
 var PREVIEW_MSG = '預覽模式只能看，不能修改。按上方「結束預覽」回到自己的身分。';
 function call(fn) {
@@ -253,9 +253,10 @@ function patchTask(id, patch, okMsg, group) {
    記住自己在這個分頁裡的修改（最多 20 步）；重新整理後就清空。 */
 var UNDO = { done: [], redo: [], max: 20 };
 var U_LABEL = { title: '名稱', owner: '負責', helper: '協力', status: '狀態', days: '天數', preds: '前置', release: '出版日', earliest: '開始日', category: '分類', categoryCustom: '分類',
-  group: '群組', detail: '說明', note: '備註', pct: '完成度', doneQty: '完成數量', qty: '數量', lag: '前置後間隔', mode: '排程方式', tag: '標籤', code: '編號', project: '專案', astart: '實際開始', aend: '實際完成' };
+  group: '群組', detail: '說明', note: '備註', pct: '完成度', doneQty: '完成數量', qty: '數量', lag: '前置後間隔', mode: '排程方式', tag: '標籤', code: '編號', project: '專案', astart: '實際開始', aend: '實際完成', baseline: '基準', vendorDays: '外包天數' };
 function undoLabel(e) {
-  var n = e.items.length, t = e.items[0] || {};
+  var u = {}; e.items.forEach(function (it) { u[it.id || (it.row && it.row.id)] = 1; });
+  var n = Object.keys(u).length, t = e.items[0] || {};
   var title = t.title || (t.row && t.row.title) || '';
   if (e.type === 'create') return n > 1 ? '新增 ' + n + ' 個工項' : '新增「' + title + '」';
   if (e.type === 'delete') return n > 1 ? '刪除 ' + n + ' 個工項' : '刪除「' + title + '」';
@@ -1127,7 +1128,7 @@ function renderBulkBar() {
   var ids = Object.keys(S.picked).filter(function (id) { return byId[id]; });
   if (!ids.length || S.route.view !== 'board') return;
   var bar = document.createElement('div'); bar.className = 'bulkbar';
-  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm" id="bkAuto" title="依工項分類的人員設定，重新自動分配未開始的工項">自動指派</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
+  bar.innerHTML = '已選 <b>' + ids.length + '</b> 項 <button class="btn sm" id="bkSt">改狀態</button><button class="btn sm" id="bkOw">指派給</button><button class="btn sm" id="bkAuto" title="依工項分類的人員設定，重新自動分配未開始的工項">自動指派</button><button class="btn sm" id="bkBase" title="把選取工項目前的預計完成日存成基準，負責人不變">重設基準</button><button class="btn sm danger" id="bkDel">刪除</button><button class="btn sm ghost" id="bkX">取消選取</button>';
   document.body.appendChild(bar);
   var tasks = ids.map(function (id) { return byId[id]; });
   var editable = tasks.filter(canEdit);
@@ -1144,6 +1145,13 @@ function renderBulkBar() {
       editable.forEach(function (t) { patchTask(t.id, { owner: name }, null, g); });
       S.picked = {}; toast('已指派 ' + editable.length + ' 項給 ' + (name || '未指派'));
     });
+  });
+  $('#bkBase').addEventListener('click', function () {
+    var ids = editable.filter(function (t) { return t.status !== '完成' && t.status !== '取消'; }).map(function (t) { return t.id; });
+    if (!ids.length) { toast('完成或取消的工項不需要重設基準', true); return; }
+    if (!confirm('把選取的 ' + ids.length + ' 個工項的基準，改成目前的預計完成日？負責人和日期都不會變。')) return;
+    busy(true);
+    call('resetBaselineIds', ids).then(function (r) { busy(false); (r.tasks || []).forEach(upsert); applyComputed(r.computed); S.picked = {}; toast('已重設 ' + r.count + ' 個工項的基準'); render(); }).catch(fail);
   });
   $('#bkAuto').addEventListener('click', function () {
     var ids = editable.filter(function (t) { return t.status === '未開始' || t.status === '暫停'; }).map(function (t) { return t.id; });

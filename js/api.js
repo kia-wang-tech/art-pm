@@ -377,7 +377,7 @@ var API = (function () {
     replaying = true;
     var seq = Promise.resolve();
     if (entry.type === 'edit') {
-      entry.items.forEach(function (it) {
+      (undo ? entry.items.slice().reverse() : entry.items).forEach(function (it) {   // 復原時從最後一個改動往回
         seq = seq.then(function () {
           var cur = cache.byId[it.id];
           if (!cur) { skipped.push(it.title + '（已刪除）'); return; }
@@ -514,7 +514,7 @@ var API = (function () {
     } catch (e) { return Promise.reject(err(e)); }
   }
   /** 重新自動分配：只處理未開始／暫停、有分類的工項；依期限先後處理 */
-  function autoAssignTasks(ids) {
+  function autoAssignTasks(ids, group) {
     var list = ids.map(function (id) { return cache.byId[id]; }).filter(function (t) { return t && (t.status === '未開始' || t.status === '暫停') && t.mode !== '平行'; });
     if (!list.length) return Promise.resolve({ count: 0, skipped: ids.length, tasks: [], computed: computedMap(), results: [] });
     list.sort(function (a, b) { return (a.release || '9999') < (b.release || '9999') ? -1 : (a.release || '9999') > (b.release || '9999') ? 1 : (a.id < b.id ? -1 : 1); });
@@ -530,7 +530,7 @@ var API = (function () {
       if (!p.owner || (p.owner === t.owner && Number(p.days) === Number(t.days))) return;
       jobs.push(t);
     });
-    var g = 'auto' + Date.now();
+    var g = group || ('auto' + Date.now());
     return jobs.reduce(function (pr, t) {
       var p = plan[list.indexOf(t)];
       return pr.then(function () { return saveTask({ id: t.id, owner: p.owner, days: p.days, _undoGroup: g }); });
@@ -744,18 +744,36 @@ var API = (function () {
     return insertTasks(rows.map(function (r) { var o = copyTask(r); o.project = projectId; return o; }));
   }
 
-  function resetBaseline(projectId) {
-    var items = [];
+  function resetBaseline(projectId, group) {
+    return resetBaselineIds(cache.tasks.filter(function (t) { return t.project === projectId; }).map(function (t) { return t.id; }), group);
+  }
+  /** 指定的工項：基準改成目前的預計完成日（完成、取消的不動），負責人不變 */
+  function resetBaselineIds(ids, group) {
+    var items = [], want = {}, olds = {};
+    ids.forEach(function (id) { want[id] = 1; });
+    if (!ids.length) return Promise.resolve({ count: 0, tasks: [], computed: computedMap() });
     cache.tasks.forEach(function (t) {
-      if (t.project !== projectId || t.status === '完成' || t.status === '取消') return;
+      if (!want[t.id] || t.status === '完成' || t.status === '取消') return;
+      olds[t.id] = t;
       var e = cache.out.result[t.id].end;
       if (e && e !== t.baseline) items.push({ id: t.id, baseline: e });
     });
     return sb.rpc('set_baselines', { items: items }).then(function (res) {
       var n = chk(res);
       return sb.from('tasks').select('*').in('id', items.map(function (x) { return x.id; }).slice(0, 1000)).then(function (r2) {
-        var rows = chk(r2), o = afterWrite(rows); o.count = n; o.tasks = rows.map(function (r) { return cache.byId[r.id] ? view(cache.byId[r.id]) : null; }).filter(Boolean); return o;
+        var rows = chk(r2), o = afterWrite(rows);
+        var uitems = rows.map(function (r) { return olds[r.id] && cache.byId[r.id] ? editItem(olds[r.id], cache.byId[r.id]) : null; }).filter(Boolean);
+        if (uitems.length) emitUndo({ type: 'edit', items: uitems }, group);
+         o.count = n; o.tasks = rows.map(function (r) { return cache.byId[r.id] ? view(cache.byId[r.id]) : null; }).filter(Boolean); return o;
       });
+    }).catch(function (e) { throw err(e); });
+  }
+  /** 重新安排專案：未開始／暫停、有分類的工項重新自動指派負責人（日期跟著重算），再把全專案未完成工項的基準重設 */
+  function replanProject(projectId) {
+    var ids = cache.tasks.filter(function (t) { return t.project === projectId && (t.status === '未開始' || t.status === '暫停') && t.category && t.mode !== '平行'; }).map(function (t) { return t.id; });
+    var g = 'replan' + Date.now();
+    return autoAssignTasks(ids, g).then(function (a) {
+      return resetBaseline(projectId, g).then(function (b) { b.assign = a; b.computed = computedMap(); b.tasks = cache.tasks.filter(function (t) { return t.project === projectId; }).map(view); return b; });
     }).catch(function (e) { throw err(e); });
   }
 
@@ -1340,7 +1358,7 @@ var API = (function () {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
-    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), capacity: capacity, applyUndo: mine(applyUndo), onUndoable: onUndoable, saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), capacity: capacity, applyUndo: mine(applyUndo), onUndoable: onUndoable, saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline), resetBaselineIds: mine(resetBaselineIds), replanProject: mine(replanProject),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
