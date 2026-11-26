@@ -100,7 +100,7 @@ function index() {
 function applyComputed(m) {
   Object.keys(m || {}).forEach(function (id) {
     var t = byId[id]; if (!t) return; var c = m[id];
-    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7]; t.rank = c[9]; t.why = c[10] || null;
+    t.start = c[0]; t.end = c[1]; t.warns = c[2]; t.slip = c[3]; t.info = c[4]; t.prio = c[5]; t.baseline = c[6]; t.expect = c[7]; t.rank = c[9]; t.why = c[10] || null; t.vStart = c[11] || ''; t.vEnd = c[12] || ''; t.ownStart = c[13] || '';
   });
 }
 function upsert(t) { if (byId[t.id]) Object.assign(byId[t.id], t); else { S.data.tasks.push(t); byId[t.id] = t; } index(); }
@@ -850,7 +850,7 @@ function rowHtml(t, color, tmin, tmax, cols) {
     category: '<td class="cell' + (ed ? '' : ' ro') + '" data-ed="category">' + (t.category ? esc(t.category) : t.categoryCustom ? '<span title="自訂分類（不使用自動指派）" style="font-style:italic">' + esc(t.categoryCustom) + '</span>' : '<span class="faint">—</span>') + '</td>',
     status: '<td class="status cell' + (up ? '' : ' ro') + '" data-ed="status"><div class="st-' + esc(t.status) + '">' + esc(t.status) + '</div></td>',
     timeline: '<td class="timeline cell ro">' + tl + '</td>',
-    days: '<td class="num cell' + (ed ? '' : ' ro') + '" data-ed="days">' + esc(t.days) + '</td>',
+    days: '<td class="num cell' + (ed ? '' : ' ro') + '" data-ed="days"' + (Number(t.vendorDays) > 0 ? ' title="外包先做 ' + esc(t.vendorDays) + ' 天，負責人再花 ' + esc(t.days) + ' 天"' : '') + '>' + esc(t.days) + (Number(t.vendorDays) > 0 ? '<div class="faint" style="font-size:11px;line-height:1.1">外包 ' + esc(t.vendorDays) + '</div>' : '') + '</td>',
     preds: '<td class="preds cell' + (ed ? '' : ' ro') + '" data-ed="preds">' + (preds || '<span class="faint">—</span>') + '</td>',
     release: '<td class="date cell' + (ed ? '' : ' ro') + (over ? ' late' : '') + '" data-ed="release">' + (t.release ? md(t.release) : '<span class="faint">—</span>') + '</td>',
     tags: '<td class="tagcell">' + (splitTags(t.tag).map(function (x) { return tagChip(x); }).join('') || '<span class="faint">—</span>') + '</td>'

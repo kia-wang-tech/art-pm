@@ -36,8 +36,8 @@ var Engine = (function () {
     return String(s).split(/[\s,，、;；]+/).map(function (x) { return x.trim(); }).filter(Boolean);
   }
 
-  function Calendar(holidays, makeup, leaves) {
-    this.hol = {}; this.mk = {}; this.leave = {};
+  function Calendar(holidays, makeup, leaves, reserve) {
+    this.hol = {}; this.mk = {}; this.leave = {}; this.res = reserve || {}; this._mw = {};
     var self = this;
     Object.keys(holidays || {}).forEach(function (k) { var n = dn(k); if (n !== null) self.hol[n] = holidays[k] || '假日'; });
     Object.keys(makeup || {}).forEach(function (k) { var n = dn(k); if (n !== null) self.mk[n] = 1; });
@@ -60,10 +60,23 @@ var Engine = (function () {
     if (w === 0 || w === 6) return false;
     return !this.hol[n];
   };
+  /** 這個月的工作天數（算「每月保留天數」的比例用） */
+  Calendar.prototype.monthWorkdays = function (n) {
+    var d = new Date(n * MS_DAY), y = d.getUTCFullYear(), mo = d.getUTCMonth(), key = y + '-' + mo;
+    if (this._mw[key] === undefined) {
+      var a = Math.round(Date.UTC(y, mo, 1) / MS_DAY), b = Math.round(Date.UTC(y, mo + 1, 1) / MS_DAY), c = 0;
+      for (var x = a; x < b; x++) if (this.isWorkday(x)) c++;
+      this._mw[key] = c;
+    }
+    return this._mw[key];
+  };
   Calendar.prototype.cap = function (person, n) {
     if (!this.isWorkday(n)) return 0;
     var m = person && this.leave[person];
-    return m && m[n] ? Math.max(0, 1 - m[n]) : 1;
+    var c = m && m[n] ? Math.max(0, 1 - m[n]) : 1;
+    var r = person ? Number(this.res[person]) || 0 : 0;   // 每月保留天數：平均扣掉每個工作天的可排工時
+    if (r > 0) c *= Math.max(0.05, 1 - r / Math.max(1, this.monthWorkdays(n)));
+    return c;
   };
   /** 從位置 x（天號 + 當天已用比例）開始做 dur 天，回傳 {start, end, alloc:[[天號, 量], ...]} */
   Calendar.prototype.advance = function (person, x, dur) {
@@ -103,10 +116,22 @@ var Engine = (function () {
    * task  = { id, owner, mode, prio, days, preds, lag, earliest, release, status, doneQty, qty, pct（完成度 0～100，可空白）, astart, aend, baseline }
    */
   function schedule(input) {
-    var cal = new Calendar(input.holidays, input.makeup, input.leaves);
+    var cal = new Calendar(input.holidays, input.makeup, input.leaves, input.reserve);
     var today = dn(input.today);
     var all = {}, list = [];
-    (input.tasks || []).forEach(function (t) { if (t && t.id) { all[t.id] = t; list.push(t); } });
+    (input.tasks || []).forEach(function (t) { if (t && t.id) list.push(t); });
+    // 外包天數：拆成「外包執行（平行，不佔內部人員）」→「負責人的工時」兩段，完成日＝外包做完後負責人再做完
+    var shadow = {}, extra = [];
+    list = list.map(function (t) {
+      var vd = num(t.vendorDays, 0);
+      if (!(vd > 0) || t.status === '完成' || t.status === '待驗收' || t.status === '取消') return t;
+      var vid = t.id + '#外包', doing = t.status === '進行中';
+      extra.push({ id: vid, title: (t.title || '') + '（外包）', project: t.project, owner: '', helper: '', mode: '平行', days: vd, preds: t.preds, lag: t.lag, earliest: t.earliest,
+        release: '', status: doing ? '進行中' : (t.status === '暫停' ? '暫停' : '未開始'), astart: t.astart, pct: doing ? t.pct : '', qty: 1, doneQty: 0, prio: t.prio, updatedAt: t.updatedAt });
+      shadow[t.id] = vid;
+      return Object.assign({}, t, { preds: vid, lag: 0, earliest: '', status: doing ? '未開始' : t.status, astart: doing ? '' : t.astart, pct: doing ? '' : t.pct, _vend: true });
+    }).concat(extra);
+    list.forEach(function (t) { all[t.id] = t; });
 
     // 協力：內部人員（input.staff 名單）會跟負責人一起被佔用時間；外包不影響排程
     var staff = {}; (input.staff || []).forEach(function (n) { staff[n] = 1; });
@@ -227,7 +252,7 @@ var Engine = (function () {
       Object.keys(desc).forEach(function (x) { var o = all[x].owner; if (o && o !== t.owner) { n++; who[o] = 1; } });
       var ls = due === null ? null : back(due, Math.max(Math.ceil(num(t.days, 0) - EPS) - 1, 0));
       var urgent = ls !== null && cal.workdaysBetween(today, ls) <= urgentDays;
-      KY[id] = { due: due, src: src, desc: desc, h: h, down: n, who: Object.keys(who), urgent: urgent, tier: urgent ? 0 : (n > 0 ? 1 : 2) };
+      KY[id] = { due: due, src: src, desc: desc, h: h, down: n, who: Object.keys(who), urgent: urgent, tier: t._vend ? -1 : (urgent ? 0 : (n > 0 ? 1 : 2)) };   // 外包交件後負責人的工時（通常是監修）優先處理
       return KY[id];
     }
     function cmpKey(a, b) {
@@ -389,6 +414,16 @@ var Engine = (function () {
     });
     list.forEach(function (t) { var r = R[t.id]; if (r.stale && r.stale.kind === '未開始') r.warn.unshift(r.stale.text); });
 
+    Object.keys(shadow).forEach(function (id) {
+      var r = R[id], v = R[shadow[id]];
+      if (r && v && v.start) {
+        r.vstart = v.start; r.vend = v.end; r.ownStart = r.start; r.start = v.start;
+        if (v.expect !== undefined) r.expect = v.expect;
+        v.warn.forEach(function (w) { if (!/^(找不到前置|暫停中|未指派負責人)/.test(w) && r.warn.indexOf('外包' + w) < 0) r.warn.push('外包' + w); });
+        r.stale = v.stale || r.stale;
+      }
+      delete R[shadow[id]];
+    });
     return { result: R, succ: succ, cal: cal };
   }
 

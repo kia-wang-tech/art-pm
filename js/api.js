@@ -29,16 +29,16 @@ var API = (function () {
 
   var T_MAP = { id: 'id', project: 'project', group: 'grp', code: 'code', tag: 'tag', title: 'title', detail: 'detail', owner: 'owner',
     helper: 'helper', mode: 'mode', prio: 'prio', days: 'days', preds: 'preds', lag: 'lag', earliest: 'earliest', release: 'release',
-    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note', category: 'category', categoryCustom: 'category_custom' };
+    status: 'status', doneQty: 'done_qty', qty: 'qty', pct: 'pct', astart: 'astart', aend: 'aend', baseline: 'baseline', note: 'note', category: 'category', categoryCustom: 'category_custom', vendorDays: 'vendor_days' };
   var T_DATES = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1 };
-  var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1, pct: 1 };
+  var T_NUMS = { prio: 1, days: 1, lag: 1, doneQty: 1, qty: 1, pct: 1, vendorDays: 1 };
 
   function fromDb(r) {
     return {
       id: r.id, project: r.project, group: r.grp || '', code: r.code || '', tag: r.tag || '', title: r.title, detail: r.detail || '',
       owner: r.owner || '', helper: r.helper || '', mode: r.mode, prio: num(r.prio, ''), days: num(r.days, 0), preds: r.preds || '',
       lag: num(r.lag, 0), earliest: r.earliest || '', release: r.release || '', status: r.status, doneQty: num(r.done_qty, 0),
-      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', category: r.category || '', categoryCustom: r.category_custom || '', src: r.src || '',
+      qty: num(r.qty, 1), pct: r.pct === null || r.pct === undefined ? '' : Number(r.pct), astart: r.astart || '', aend: r.aend || '', baseline: r.baseline || '', note: r.note || '', category: r.category || '', categoryCustom: r.category_custom || '', vendorDays: r.vendor_days === null || r.vendor_days === undefined ? '' : Number(r.vendor_days), src: r.src || '',
       by: r.updated_by || '', updatedAt: r.updated_at ? new Date(new Date(r.updated_at).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '',
       at: r.version, version: r.version, archived: r.archived || ''
     };
@@ -49,7 +49,7 @@ var API = (function () {
       if (!(k in o) || k === 'id') return;
       var v = o[k];
       if (T_DATES[k]) v = dOrNull(v);
-      else if (T_NUMS[k]) v = (v === '' || v === null || v === undefined) ? ((k === 'prio' || k === 'pct') ? null : 0) : Number(v);
+      else if (T_NUMS[k]) v = (v === '' || v === null || v === undefined) ? ((k === 'prio' || k === 'pct' || k === 'vendorDays') ? null : 0) : Number(v);
       else if (k === 'category') v = v ? String(v) : null;
       else v = v === null || v === undefined ? '' : String(v);
       r[T_MAP[k]] = v;
@@ -75,6 +75,7 @@ var API = (function () {
     return {
       tasks: tasks, holidays: hol, makeup: mk, today: today(), lenientPreds: true, urgentDays: urgentDays(),
       staff: cache.people.filter(function (p) { return p.active; }).map(function (p) { return p.name; }),
+      reserve: cache.people.reduce(function (m, p) { if (Number(p.reserve) > 0) m[p.name] = Number(p.reserve); return m; }, {}),
       leaves: cache.leaves.map(function (l) { return { person: l.person, start: l.start_date, end: l.end_date, days: l.days }; })
     };
   }
@@ -85,7 +86,7 @@ var API = (function () {
   }
   function decorate(t) {
     var r = cache.out && cache.out.result[t.id];
-    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; t.rank = r.rank; t.why = r.why || null; }
+    if (r) { t.start = r.start; t.end = r.end; t.warns = r.warn; t.slip = r.slip; t.info = r.info || ''; t.expect = r.expect; t.rank = r.rank; t.why = r.why || null; t.vStart = r.vstart || ''; t.vEnd = r.vend || ''; t.ownStart = r.ownStart || ''; }
     else { t.start = ''; t.end = ''; t.warns = []; t.slip = 0; t.info = ''; t.expect = undefined; t.rank = undefined; t.why = null; }
     return t;
   }
@@ -93,7 +94,7 @@ var API = (function () {
   function view(t) { return decorate(copyTask(t)); }
   function computedMap() {
     var m = {};
-    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect, '', r.rank, r.why || null]; });
+    cache.tasks.forEach(function (t) { var r = cache.out.result[t.id]; m[t.id] = [r.start, r.end, r.warn, r.slip, r.info || '', t.prio, t.baseline || '', r.expect, '', r.rank, r.why || null, r.vstart || '', r.vend || '', r.ownStart || '']; });
     return m;
   }
   function putTask(t) {
@@ -154,13 +155,13 @@ var API = (function () {
       return (Engine.dn(r.end) || 0) >= cutoff;
     }).map(view);
     var tpl = {};
-    cache.templates.forEach(function (s) { (tpl[s.tpl] = tpl[s.tpl] || []).push({ step: s.step, title: s.title, group: s.grp, days: s.days, preds: s.preds || '', mode: s.mode, category: s.category || '' }); });
+    cache.templates.forEach(function (s) { (tpl[s.tpl] = tpl[s.tpl] || []).push({ step: s.step, title: s.title, group: s.grp, days: s.days, preds: s.preds || '', mode: s.mode, category: s.category || '', vendorDays: s.vendor_days === null || s.vendor_days === undefined ? '' : Number(s.vendor_days) }); });
     var hol = {}, mk = {};
     cache.calendar.forEach(function (c) { if (c.type === '補班') mk[c.day] = 1; else hol[c.day] = c.name || '假日'; });
     return {
       me: me, today: today(),
       projects: cache.projects.map(clientProject),
-      people: cache.people.filter(function (p) { return p.active; }).map(function (p) { return { name: p.name, role: p.role, alias: p.alias, email: me.role === '管理員' ? p.email : undefined }; }),
+      people: cache.people.filter(function (p) { return p.active; }).map(function (p) { return { name: p.name, role: p.role, alias: p.alias, reserve: Number(p.reserve) || 0, email: me.role === '管理員' ? p.email : undefined }; }),
       tasks: tasks,
       vendors: (cache.vendors || []).map(function (v) { return { name: v.name, type: v.type, alias: v.alias, active: v.active }; }),
       tagColors: Object.assign({}, cache.tagColors || {}),
@@ -547,7 +548,7 @@ var API = (function () {
           id: ids[i], project: o.project, group: o.group || '', code: o.code || '', tag: o.tag || '', title: String(o.title || '').trim(),
           detail: o.detail || '', owner: o.owner || '', helper: o.helper || '', mode: o.mode || '排隊', prio: o.prio === undefined ? '' : o.prio,
           days: num(o.days, 1), preds: o.preds || '', lag: num(o.lag, 0), earliest: o.earliest || '', release: o.release || '',
-          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || '', category: o.category || '', categoryCustom: o.category ? '' : (o.categoryCustom || '')
+          status: o.status || '未開始', doneQty: num(o.doneQty, 0), qty: num(o.qty, 1), astart: o.astart || '', aend: o.aend || '', baseline: '', note: o.note || '', category: o.category || '', categoryCustom: o.category ? '' : (o.categoryCustom || ''), vendorDays: o.vendorDays === undefined || o.vendorDays === null ? '' : o.vendorDays
         };
         validate(t);
         return t;
@@ -723,6 +724,7 @@ var API = (function () {
         project: spec.project, group: spec.group || s.grp, title: ((spec.prefix ? spec.prefix + ' ' : '') + s.title).trim(),
         owner: (spec.owners && spec.owners[key]) || '', days: (spec.days && spec.days[key] !== undefined && spec.days[key] !== '') ? spec.days[key] : s.days,
         category: (spec.categories && spec.categories[key] !== undefined) ? spec.categories[key] : (s.category || ''), keepDays: !!(spec.keepDays && spec.keepDays[key]),
+        vendorDays: (spec.vendorDays && spec.vendorDays[key] !== undefined) ? spec.vendorDays[key] : (s.vendor_days === null || s.vendor_days === undefined ? '' : Number(s.vendor_days)),
         mode: s.mode || '排隊', preds: preds.join(', '), earliest: preds.length ? '' : (spec.earliest || ''), release: spec.release || '', tag: spec.tag || ''
       };
     });
@@ -805,7 +807,7 @@ var API = (function () {
   function adminData() {
     return {
       settings: (cache.settingsRows || []).map(function (r) { return { key: r.key, value: r.value, note: r.note }; }),
-      people: cache.people.map(function (p) { return { name: p.name, email: p.email || '', role: p.role, alias: p.alias, active: p.active, note: p.note }; })
+      people: cache.people.map(function (p) { return { name: p.name, email: p.email || '', role: p.role, alias: p.alias, active: p.active, note: p.note, reserve: Number(p.reserve) || 0 }; })
         .sort(function (a, b) { return (b.active - a.active) || a.name.localeCompare(b.name, 'zh-Hant'); }),
       calendar: cache.calendar.slice().sort(function (a, b) { return a.day < b.day ? -1 : 1; }),
       templates: cache.templates.slice().sort(function (a, b) { return a.tpl === b.tpl ? a.step - b.step : (a.tpl < b.tpl ? -1 : 1); }),
@@ -820,6 +822,8 @@ var API = (function () {
     };
   }
   function refresh(history) { compute(); return snapshot(history); }
+  /** 某人在 a～b（天號，不含 b）可排的工作天：扣掉休假和每月保留天數 */
+  function capacity(name, a, b) { var cal = cache.out && cache.out.cal, c = 0; if (!cal) return 0; for (var x = a; x < b; x++) c += cal.cap(name, x); return c; }
 
   /** 專案的工項數（含已封存），刪除前確認用 */
   function countProjectTasks(id) {
@@ -856,6 +860,7 @@ var API = (function () {
 
   function savePerson(origName, o) {
     var row = { email: o.email ? String(o.email).trim().toLowerCase() : null, role: o.role || '美術', alias: o.alias || '', active: o.active !== false, note: o.note || '' };
+    if (o.reserve !== undefined) { var rv = o.reserve === '' || o.reserve === null ? 0 : Number(o.reserve); if (isNaN(rv) || rv < 0 || rv > 31) return Promise.reject(new Error('每月保留天數要是 0～31 的數字。')); row.reserve = rv; }
     if (row.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(row.email)) return Promise.reject(new Error('Email 格式不正確。'));
     var q;
     if (origName) q = sb.from('people').update(row).eq('name', origName).select();
@@ -929,7 +934,7 @@ var API = (function () {
     } catch (e) { return Promise.reject(e); }
     if (name !== oldName && cache.templates.some(function (t) { return t.tpl === name; })) return Promise.reject(new Error('已經有叫「' + name + '」的範本。'));
     var rows = steps.map(function (s, i) {
-      return { tpl: name, step: i + 1, title: String(s.title).trim(), grp: s.grp || '', days: num(s.days, 1), preds: split(s.preds).join(','), mode: s.mode === '平行' ? '平行' : '排隊', category: s.category || null };
+      return { tpl: name, step: i + 1, title: String(s.title).trim(), grp: s.grp || '', days: num(s.days, 1), preds: split(s.preds).join(','), mode: s.mode === '平行' ? '平行' : '排隊', category: s.category || null, vendor_days: s.vendorDays === '' || s.vendorDays === undefined || s.vendorDays === null || isNaN(Number(s.vendorDays)) || Number(s.vendorDays) <= 0 ? null : Number(s.vendorDays) };
     });
     var del = oldName ? sb.from('templates').delete().eq('tpl', oldName).then(chk) : Promise.resolve();
     return del.then(function () { return sb.from('templates').insert(rows).select(); }).then(function (res) {
@@ -1046,19 +1051,19 @@ var API = (function () {
   var SHEETS = {
     tasks: ['工項', { id: '工項ID', project: '專案ID', grp: '群組', code: '編號', tag: '標籤', title: '工項名稱', detail: '說明', owner: '負責', helper: '協力',
       mode: '排程方式', prio: '優先序', days: '天數', preds: '前置工項', lag: '前置後間隔', earliest: '最早開始', release: '出版日', status: '狀態',
-      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度', category: '分類', category_custom: '自訂分類' }],
+      done_qty: '完成數量', qty: '數量', pct: '完成度', astart: '實際開始', aend: '實際完成', baseline: '基準完成', note: '備註', src: '來源', archived: '封存年度', category: '分類', category_custom: '自訂分類', vendor_days: '外包天數' }],
     projects: ['專案', { id: '專案ID', name: '專案名稱', code: '代碼', status: '狀態', pm: 'PM', start: '開始日', target: '目標日', color: '顏色', note: '備註', icon: '圖示' }],
-    people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註' }],
+    people: ['人員', { name: '姓名', email: 'Email', role: '角色', alias: '別名', active: '在職', note: '備註', reserve: '每月保留天數' }],
     vendors: ['外包', { name: '名稱', email: 'Email', type: '類型', alias: '別名', active: '合作', note: '備註' }],
     calendar: ['行事曆', { day: '日期', type: '類型', name: '名稱' }],
     leaves: ['休假', { person: '人員', start_date: '開始日', end_date: '結束日', days: '天數', type: '類型', note: '說明' }],
-    templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式', category: '分類' }],
+    templates: ['範本', { tpl: '範本名稱', step: '步驟', title: '工項名稱', grp: '群組', days: '天數', preds: '前置步驟', mode: '排程方式', category: '分類', vendor_days: '外包天數' }],
     categories: ['分類', { name: '名稱', sort: '排序', active: '使用中' }],
     person_types: ['人員工項', { person: '人員', category: '分類', level: '等級', days: '天數' }],
     settings: ['設定', { key: '項目', value: '值', note: '說明' }]
   };
   var DATE_COLS = { earliest: 1, release: 1, astart: 1, aend: 1, baseline: 1, start: 1, target: 1, day: 1, start_date: 1, end_date: 1 };
-  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, pct: 1, step: 1, sort: 1 };
+  var NUM_COLS = { prio: 1, days: 1, lag: 1, done_qty: 1, qty: 1, pct: 1, step: 1, sort: 1, vendor_days: 1, reserve: 1 };
   function cellDate(v) {
     if (v === '' || v === null || v === undefined) return null;
     if (typeof v === 'number') return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
@@ -1109,7 +1114,7 @@ var API = (function () {
     });
     out.people = out.people.filter(function (p) { return p.name; }).map(function (p) {
       p.email = p.email ? p.email.toLowerCase() : null; p.role = p.role || '美術'; p.alias = p.alias || ''; p.note = p.note || '';
-      p.active = !(p.active === '否' || p.active === 'false' || p.active === 'FALSE'); return p;
+      p.active = !(p.active === '否' || p.active === 'false' || p.active === 'FALSE'); p.reserve = p.reserve === null || isNaN(p.reserve) ? 0 : p.reserve; return p;
     });
     var seen = {};
     out.people = out.people.filter(function (p) { if (!p.email) return true; if (seen[p.email]) { warn.push('Email 重複：' + p.email + '（' + p.name + '）'); return false; } seen[p.email] = 1; return true; });
@@ -1335,7 +1340,7 @@ var API = (function () {
     init: init, signIn: signIn, signOut: signOut, onChange: onChange,
     getData: function (opts) { return loadAll().then(function () { return snapshot(opts && opts.history); }).catch(function (e) { throw err(e); }); },
     saveTask: mine(saveTask), setStatus: mine(setStatus), previewTask: previewTask, suggestOwners: suggestOwners, urgentDays: urgentDays, deleteTask: mine(deleteTask), reorderQueue: mine(reorderQueue),
-    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), applyUndo: mine(applyUndo), onUndoable: onUndoable, saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
+    applyTemplate: mine(applyTemplate), bulkAdd: mine(bulkAdd), bulkStatus: mine(bulkStatus), saveProject: mine(saveProject), capacity: capacity, applyUndo: mine(applyUndo), onUndoable: onUndoable, saveCategory: mine(saveCategory), deleteCategory: mine(deleteCategory), countCategory: countCategory, savePersonTypes: mine(savePersonTypes), deletePersonType: mine(deletePersonType), previewAssign: previewAssign, autoAssignTasks: mine(autoAssignTasks), deleteProject: mine(deleteProject), countProjectTasks: countProjectTasks, resetBaseline: mine(resetBaseline),
     saveLeave: mine(saveLeave), exportPersonal: exportPersonal, getLog: getLog, getTaskLog: getTaskLog, parseWorkbook: parseWorkbook, importPayload: mine(importPayload),
     adminData: adminData, refresh: refresh, saveSetting: mine(saveSetting), savePerson: mine(savePerson), deletePerson: mine(deletePerson),
     saveDay: mine(saveDay), saveDays: mine(saveDays), deleteDay: mine(deleteDay), saveTemplate: mine(saveTemplate), deleteTemplate: mine(deleteTemplate), deleteLeave: mine(deleteLeave),
