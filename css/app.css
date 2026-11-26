@@ -297,7 +297,7 @@ svg.arrows path.tmp { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 5 4;
 .pname .load i { display: block; height: 100%; background: var(--ok); }
 .pname .load i.over { background: var(--danger); }
 .prow { position: absolute; left: 0; right: 0; border-bottom: 1px solid var(--line2); }
-.leave { position: absolute; z-index: 1; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ok) 22%, transparent) 0 5px, transparent 5px 10px); }
+.leave { position: absolute; z-index: 1; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ok) 30%, transparent) 0 5px, transparent 5px 10px); }
 
 /* ---------- 我的工作 ---------- */
 .mine-h { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -535,7 +535,8 @@ body.colresize { cursor: col-resize; user-select: none; }
 .pop .xrm.danger { color: var(--danger); font-weight: 600; }
 .wtag.i { background: var(--accent-soft); color: var(--accent); }
 /* 專案甘特圖：工項長條上的休假日 */
-.gleave { position: absolute; height: 22px; z-index: 5; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, rgba(0,0,0,.38) 0 3px, rgba(255,255,255,.55) 3px 6px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+/* 請假：人員排程和專案甘特圖都用同一種綠色斜線；長條上的請假日也蓋一層 */
+.gleave { position: absolute; height: 22px; z-index: 5; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, var(--ok) 0 4px, transparent 4px 9px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 70%, transparent); }
 /* 設定 → 工項分類：分類一列，右邊是人員卡片 */
 .cattbl td { vertical-align: top; }
 .cattbl tr.off td:first-child { opacity: .6; }
