@@ -5,7 +5,8 @@
  *  - 時間單位是「工作天」，可以有小數（0.5 天）。週末、行事曆的假日不算；行事曆的「補班」算。
  *  - 個人休假會扣掉那個人那幾天的可用時間（半天假 = 該天只剩 0.5）。
  *  - 排程方式「排隊」：佔用負責人的時間。同一人的排隊工項依序一個接一個做，順序由系統自動決定：
- *      趕期限（期限前 urgentDays 個工作天內要開始）→ 下游有其他人的工作在等 → 期限（含下游推回來的期限）先後 → 建立順序。
+ *      趕期限（期限前 urgentDays 個工作天內要開始）→ 下游有其他人的工作在等 → 期限（含下游推回來的期限）先後 → 建立順序；
+ *      同一人、同專案同群組的工作（例如同一次套用的範本）照建立順序做。
  *    第一項在等前置時，空檔內做得完的後面工項會先插進來做。
  *  - 排程方式「平行」：不佔用負責人的時間（例如監修外包），只看前置與最早開始。
  *  - 開始時間 = 下列最晚者：今天、最早開始、所有前置完成（+前置後間隔）、負責人手上前一項排隊工作做完。
@@ -255,10 +256,27 @@ var Engine = (function () {
       KY[id] = { due: due, src: src, desc: desc, h: h, down: n, who: Object.keys(who), urgent: urgent, tier: t._vend ? -1 : (urgent ? 0 : (n > 0 ? 1 : 2)) };   // 外包交件後負責人的工時（通常是監修）優先處理
       return KY[id];
     }
+    function baseCmp(x, y) {
+      return (x.tier - y.tier) || ((x.due === null ? 1e9 : x.due) - (y.due === null ? 1e9 : y.due)) || (y.down - x.down) || (y.h - x.h);
+    }
+    // 同一個人、同專案同群組（例如同一個角色、同一次套用的範本）的工作照建立順序（＝範本步驟）做：
+    // 前面的步驟繼承後面步驟中最急的優先度，所以不會被後面的步驟插隊，整組仍依最急的那項跟其他工作比先後
+    var EFF = {}, grpOf = {};
+    list.forEach(function (t) {
+      if ((t.status !== '未開始' && t.status !== '暫停') || !t.owner || t.mode === '平行') return;
+      var g = t.project + '\u0000' + (t.group || '') + '\u0000' + t.owner;
+      (grpOf[g] = grpOf[g] || []).push(t);
+    });
+    Object.keys(grpOf).forEach(function (g) {
+      var run = null;
+      grpOf[g].sort(function (a, b) { return a.id < b.id ? 1 : -1; }).forEach(function (t) {
+        var k = keyOf(t.id);
+        if (!run || baseCmp(k, run) < 0) run = k;
+        EFF[t.id] = run;
+      });
+    });
     function cmpKey(a, b) {
-      var x = keyOf(a.id), y = keyOf(b.id);
-      return (x.tier - y.tier) || ((x.due === null ? 1e9 : x.due) - (y.due === null ? 1e9 : y.due)) || (y.down - x.down) || (y.h - x.h) ||
-        (num(a.prio, 1e9) - num(b.prio, 1e9)) || ((dn(a.earliest) || 0) - (dn(b.earliest) || 0)) || (a.id < b.id ? -1 : 1);
+      return baseCmp(EFF[a.id] || keyOf(a.id), EFF[b.id] || keyOf(b.id)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     }
     var waitingAll = list.filter(function (t) { return t.status === '未開始' || t.status === '暫停'; }).sort(cmpKey);
     waitingAll.forEach(function (t, i) {
