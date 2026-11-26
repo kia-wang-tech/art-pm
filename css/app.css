@@ -535,8 +535,7 @@ body.colresize { cursor: col-resize; user-select: none; }
 .pop .xrm.danger { color: var(--danger); font-weight: 600; }
 .wtag.i { background: var(--accent-soft); color: var(--accent); }
 /* 專案甘特圖：工項長條上的休假日 */
-/* 請假：人員排程和專案甘特圖都用同一種綠色斜線；長條上的請假日也蓋一層 */
-.gleave { position: absolute; height: 22px; z-index: 5; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, var(--ok) 0 4px, transparent 4px 9px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 70%, transparent); }
+/* 請假：人員排程和專案甘特圖都只畫在背景（綠色斜線），不蓋到工項 */
 /* 設定 → 工項分類：分類一列，右邊是人員卡片 */
 .cattbl td { vertical-align: top; }
 .cattbl tr.off td:first-child { opacity: .6; }
@@ -554,5 +553,5 @@ body.colresize { cursor: col-resize; user-select: none; }
 .skcard .skf input { width: 56px; padding: 2px 6px; height: 28px; }
 .skadd { width: 40px; min-height: 40px; align-self: center; border-radius: 50%; border: 2px dashed var(--line); background: none; color: var(--ink3); font-size: 20px; cursor: pointer; }
 .skadd:hover { border-color: var(--accent); color: var(--accent); }
-/* 外包執行的那一段：淡色斜線，表示不佔負責人時間 */
-.gvend { position: absolute; height: 22px; z-index: 5; border-radius: 6px 0 0 6px; pointer-events: none; background: repeating-linear-gradient(90deg, rgba(255,255,255,.38) 0 2px, transparent 2px 6px), rgba(255,255,255,.28); }
+/* 外包執行的那一段：和「平行」一樣的斜線，負責人的工時維持實心 */
+.gvend { position: absolute; height: 22px; z-index: 5; border-radius: 6px 0 0 6px; pointer-events: none; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.28) 0 4px, transparent 4px 9px); }

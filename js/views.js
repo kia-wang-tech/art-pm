@@ -171,11 +171,6 @@ function renderPeople(c) {
     L.ts.forEach(function (t) {
       var a = x(Math.max(dn(t.start), min)), b = x(Math.min(dn(t.end), max) + 1);
       var ed = canEdit(t) && !t._help, movable = ed && (t.status === '未開始' || t.status === '暫停'), sizable = ed && t.status !== '完成' && t.status !== '取消' && dn(t.end) <= max;
-      d.leaves.forEach(function (l) {
-        if (l.person !== L.p.name) return;
-        var la = Math.max(dn(l.start), dn(t.ownStart || t.start), min), lb = Math.min(dn(l.end) || dn(l.start), dn(t.end), max);
-        for (var dd = la; dd <= lb; dd++) { if (isOff(dd)) continue; var ee = dd; while (ee + 1 <= lb && !isOff(ee + 1)) ee++; h += '<div class="gleave" style="left:' + x(dd) + 'px;width:' + ((ee - dd + 1) * W - 2) + 'px;top:' + (L.top + 6 + t._lane * LH) + 'px"></div>'; dd = ee; }
-      });
       if (t.vStart && t.vEnd) { var va = Math.max(dn(t.vStart), min), vb = Math.min(dn(t.vEnd), max); if (vb >= va) h += '<div class="gvend" style="left:' + x(va) + 'px;width:' + ((vb - va + 1) * W - 2) + 'px;top:' + (L.top + 6 + t._lane * LH) + 'px"></div>'; }
       h += '<div class="gbar' + (movable ? '' : ' ro') + (t._help ? ' help' : '') + (t.mode === '平行' ? ' par' : '') + (worst(t) === 'd' ? ' bad' : '') + (t.status === '完成' ? ' done' : '') + '" data-id="' + esc(t.id) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 6) + 'px;top:' + (L.top + 6 + t._lane * LH) + 'px;background-color:' + pcolor(t.project) + '" title="' + esc((t._help ? '協力「' + t._help + '」的工項｜' : '') + projName(t.project) + '｜' + t.title + '\n' + t.status + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天' + (t.vStart ? '（外包 ' + md(t.vStart) + '–' + md(t.vEnd) + ' 先做 ' + t.vendorDays + ' 天，不佔時間）' : '') + (t.pct != null && t.pct !== '' ? '｜完成 ' + t.pct + '%' : '') + (movable ? '\n拖曳改開始日，拉右邊緣改天數' : '')) + '"><span class="lbl">' + (W >= 13 ? esc(t.title) : '') + '</span>' + (sizable ? '<span class="rz"></span>' : '') + '</div>';
     });

@@ -51,7 +51,7 @@ function renderGantt(c) {
     var cls = 'gbar' + (t.mode === '平行' ? ' par' : '') + (worst(t) === 'd' ? ' bad' : '') + (t.status === '完成' ? ' done' : '') + (movable ? '' : ' ro');
     h += '<div class="' + cls + '" data-id="' + esc(t.id) + '" data-mv="' + (movable ? 1 : 0) + '" style="left:' + a + 'px;width:' + Math.max(b - a - 2, 8) + 'px;top:' + (i * RH + 6) + 'px;background-color:' + r.color + '" title="' + esc(t.title + '\n' + (t.owner || '未指派') + '｜' + t.start + ' ~ ' + t.end + '｜' + t.days + ' 天' + (t.vStart ? '（外包 ' + md(t.vStart) + '–' + md(t.vEnd) + '，' + t.vendorDays + ' 天）' : '') + '｜' + t.status + leaveText(t) + ((t.warns || []).length ? '\n⚠ ' + t.warns.join('\n⚠ ') : '')) + '">' +
       '<span class="lbl">' + (S.ganttScale !== 'month' ? esc(t.title) : '') + '</span>' + (sizable ? '<span class="rz"></span>' : '') + (ed ? '<span class="lk" title="拉到另一個工項：設定它要等這項完成"></span>' : '') + '</div>';
-    h += leaveMarks(t, i * RH + 6, x, W) + vendMark(t, i * RH + 6, x, W);
+    h += leaveMarks(t, i * RH, x, W, RH) + vendMark(t, i * RH + 6, x, W);
     if (t.release && dn(t.release) >= min && dn(t.release) <= max) h += '<div class="grel" style="left:' + (x(dn(t.release)) + W) + 'px;top:' + (i * RH + 12) + 'px" title="出版日 ' + esc(t.release) + '"></div>';
   });
   h += '<svg class="arrows" id="gSvg" width="' + width + '" height="' + height + '"><defs><marker id="arr" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor" stroke="none"/></marker></defs>' + arrowPaths(list) + '</svg>';
@@ -71,7 +71,7 @@ function renderGantt(c) {
   bindGanttDrag($('#gBody'));
   highlight();
 }
-/** 工項長條上標出負責人／內部協力在這段期間的休假日（滑鼠移上去顯示人員與假別） */
+/** 負責人／內部協力在工項期間的請假日（背景標示；滑鼠移到長條上顯示人員與假別） */
 function leaveSpans(t) {
   if (t.mode === '平行' || !t.start || !t.end) return [];
   var who = [t.owner].concat(Engine.splitNames(t.helper).filter(isStaff)).filter(Boolean), a0 = dn(t.ownStart || t.start), b0 = dn(t.end), out = [];
@@ -89,8 +89,9 @@ function leaveSpans(t) {
 /** 外包執行的那一段：長條上蓋一層淡色，表示不佔負責人時間 */
 function vendMark(t, top, x, W) { if (!t.vStart || !t.vEnd) return ''; return '<div class="gvend" style="left:' + x(dn(t.vStart)) + 'px;width:' + Math.max(4, (dn(t.vEnd) - dn(t.vStart) + 1) * W - 2) + 'px;top:' + top + 'px"></div>'; }
 function leaveText(t) { var sp = leaveSpans(t); return sp.length ? '\n請假：' + sp.map(function (x) { return x.person + ' ' + x.type + ' ' + md(ds(x.a)) + (x.b > x.a ? '–' + md(ds(x.b)) : ''); }).join('、') : ''; }
-function leaveMarks(t, top, x, W) {
-  return leaveSpans(t).map(function (sp) { return '<div class="gleave" style="left:' + x(sp.a) + 'px;width:' + ((sp.b - sp.a + 1) * W - 2) + 'px;top:' + top + 'px"></div>'; }).join('');
+/** 請假日畫在這一列的背景（綠色斜線，在長條下面） */
+function leaveMarks(t, top, x, W, h) {
+  return leaveSpans(t).map(function (sp) { return '<div class="leave" style="left:' + x(sp.a) + 'px;width:' + ((sp.b - sp.a + 1) * W) + 'px;top:' + top + 'px;height:' + h + 'px"></div>'; }).join('');
 }
 function arrowPaths(list) {
   var out = '';
