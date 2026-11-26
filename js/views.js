@@ -1022,9 +1022,8 @@ function setCategories(box) {
   });
   var maxSort = d.categories.reduce(function (m, c) { return Math.max(m, c.sort || 0); }, 0);
   var lvOpts = function (v) { return LEVELS.map(function (l) { return '<option value="' + l[0] + '"' + (Number(v) === l[0] ? ' selected' : '') + '>' + l[1] + '</option>'; }).join(''); };
-  var h = '<div class="toolbar" style="padding:0 0 12px"><span class="search">' + IC.search + '<input type="search" class="field" id="ctQ" placeholder="搜尋分類或人員" value="' + esc(S.catQ || '') + '"></span><label class="chk"><input type="checkbox" id="ctOff"' + (showOff ? ' checked' : '') + '>顯示停用的</label><span class="grow"></span><button class="btn" id="ctBulk">批次新增分類</button><span class="muted">' + d.categories.filter(function (c) { return c.active; }).length + ' 個使用中</span></div>';
+  var h = '<div class="toolbar" style="padding:0 0 12px"><span class="search">' + IC.search + '<input type="search" class="field" id="ctQ" placeholder="搜尋分類或人員" value="' + esc(S.catQ || '') + '"></span><label class="chk"><input type="checkbox" id="ctOff"' + (showOff ? ' checked' : '') + '>顯示停用的</label><span class="grow"></span><input class="field" id="ncName" placeholder="新分類名稱，例如「立繪」" style="width:220px"><button class="btn primary" id="ncAdd">新增分類</button><button class="btn" id="ctBulk">批次新增</button><span class="muted">' + d.categories.filter(function (c) { return c.active; }).length + ' 個使用中</span></div>';
   h += '<div class="tablewrap" style="max-height:calc(100vh - 250px)"><table class="grid2 cattbl" style="min-width:760px"><thead><tr><th style="width:240px">工項分類</th><th>可以做的人員（等級・預設天數）</th></tr></thead><tbody>';
-  h += '<tr style="background:var(--accent-soft)"><td><div style="display:flex;gap:6px"><input class="field" id="ncName" placeholder="新分類名稱，例如「立繪」"><button class="btn sm primary" id="ncAdd">新增</button></div></td><td class="faint" style="font-size:12px">新增分類後，按右邊的 ＋ 加入可以做這類工作的人員</td></tr>';
   list.forEach(function (c, i) {
     var n = d.catUsage[c.name] || 0, ppl = byCat[c.name] || [];
     h += '<tr data-ci="' + i + '"' + (c.active ? '' : ' class="off"') + '><td style="vertical-align:top">' +
@@ -1035,7 +1034,7 @@ function setCategories(box) {
           '<div class="skf"><select class="field" data-f="level">' + lvOpts(x.level) + '</select><input class="field" type="number" step="0.5" min="0" data-f="days" value="' + esc(x.days) + '" placeholder="天數"><span class="faint">天</span></div></div>';
       }).join('') + '<button class="skadd" data-skadd title="加入人員">＋</button></div></td></tr>';
   });
-  if (!list.length) h += '<tr><td colspan="2" class="empty">' + (d.categories.length ? '沒有符合的分類。' : '還沒有分類，先在上面新增，或按「批次新增分類」一次貼上多個。') + '</td></tr>';
+  if (!list.length) h += '<tr><td colspan="2" class="empty">' + (d.categories.length ? '沒有符合的分類。' : '還沒有分類，先在右上方新增，或按「批次新增」一次貼上多個。新增後按每一列右邊的 ＋ 加入人員。') + '</td></tr>';
   h += '</tbody></table></div><div class="hint" style="margin-top:8px"><b>主要</b>：這類工作優先派給他；<b>次要</b>、<b>可支援</b>：主要人員趕不上期限，或他們能提早「自動指派提早天數」（一般設定）以上完成時才派給他們。預設天數會在指派給這個人時自動填入工項，空白＝用工項原本的天數。改分類名稱會連同所有工項一起改；已有工項（含已封存）使用的分類不能刪除，不再使用請取消勾選「使用中」。修改後離開欄位會自動儲存。</div>';
   box.innerHTML = h;
   var redraw = function () { S.data = API.refresh(S.data.history); index(); var y = $('.tablewrap', box) ? $('.tablewrap', box).scrollTop : 0; setCategories(box); var w = $('.tablewrap', box); if (w) w.scrollTop = y; };
@@ -1092,7 +1091,11 @@ function setCategories(box) {
   }); });
   var addOne = function () {
     var name = $('#ncName').value.trim();
-    busy(true); call('saveCategory', null, { name: name, sort: maxSort + 10, note: '', active: true }).then(function () { busy(false); toast('已新增：' + name); redraw(); var n = $('#ncName'); if (n) n.focus(); }).catch(fail);
+    busy(true); call('saveCategory', null, { name: name, sort: maxSort + 10, note: '', active: true }).then(function () { busy(false); toast('已新增：' + name); redraw(); var n = $('#ncName'); if (n) n.focus();
+      // 捲到新分類那一列，方便接著按 ＋ 加人員
+      var row = $$('tr[data-ci]', box).filter(function (tr) { var i = $('input[data-f=name]', tr); return i && i.value === name; })[0];
+      if (row) { row.scrollIntoView({ block: 'center' }); row.style.background = 'var(--accent-soft)'; setTimeout(function () { row.style.background = ''; }, 1600); }
+    }).catch(fail);
   };
   $('#ncAdd').addEventListener('click', addOne);
   $('#ncName').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addOne(); } });
