@@ -763,7 +763,7 @@ function renderBoard(c) {
   // 主表格照建立順序（套用範本＝範本步驟順序）
   var list = filtered(projectTasks(p.id)).sort(function (a, b) { return a.id.localeCompare(b.id); });
   var groups = groupsOf(list);
-  var h = filterBar(p.id, '<button class="btn ghost hide-m" id="colBtn" title="調整表格欄位的順序與寬度">欄位</button>') + '<div class="board">';
+  var h = filterBar(p.id, '<button class="btn ghost hide-m" id="colBtn" title="調整表格欄位的順序與寬度">欄位</button>').replace('<div class="toolbar">', '<div class="toolbar stick">') + '<div class="board">';
   if (!list.length) {
     h += '<div class="card empty"><b>' + (projectTasks(p.id).length ? '沒有符合篩選的工項' : '這個專案還沒有工項') + '</b>' +
       (projectTasks(p.id).length ? (S.hideDone ? '已完成的工項被隱藏了，可以點「隱藏已完成」顯示。' : '試試清除篩選。') : (p.canEdit ? '按右上角「新增工項」，或用「套用範本」一次建立一整串。' : '')) + '</div>';

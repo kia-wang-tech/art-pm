@@ -556,3 +556,5 @@ body.colresize { cursor: col-resize; user-select: none; }
 /* 外包執行的那一段：和「平行」一樣的斜線，負責人的工時維持實心 */
 .gvend { position: absolute; height: 22px; z-index: 5; border-radius: 6px 0 0 6px; pointer-events: none; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.28) 0 4px, transparent 4px 9px); }
 .cattbl thead th { position: sticky; top: 0; z-index: 2; background: var(--surface2); }
+/* 專案主表格：篩選列固定在上方，只有工項列表捲動 */
+.content:not(.flush) > .toolbar.stick { position: sticky; top: -16px; z-index: 7; background: var(--bg); margin-top: -16px; padding-top: 16px; box-shadow: 0 1px 0 var(--line); }
